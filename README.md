@@ -1,44 +1,56 @@
-# Lowcode Automation Platform (Go)
+# lowcode-bpmn
 
-This project is a Golang-based workflow and automation engine similar to Airtable Automations / n8n / activepieces, focused on:
+Lightweight **BPMN 2.0** workflow engine in Go. Reference design: [tumbleweed](https://github.com/lzw5399/tumbleweed).
 
-- Trigger-based workflow execution (timer, event, webhook, manual)
-- Node-based DAG flows (conditions, actions, transforms)
-- API-first design to allow easy integration by other platforms
+## Architecture
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Getting Started
 
-Prerequisites:
-
-- Go 1.22+
-
-Run the HTTP API server:
-
 ```bash
+export DATABASE_URL="postgres://user:pass@localhost:5432/lowcode_bpmn?sslmode=disable"
 go run ./cmd/server
 ```
 
-The server will start on `:8080` by default and expose a basic health endpoint:
+| Env | Default | Description |
+|-----|---------|-------------|
+| `HTTP_ADDR` | `:8080` | Listen address |
+| `DATABASE_URL` | (required) | PostgreSQL DSN |
+| `ASYNC_EXECUTION` | `false` | Enable async worker for start/continue |
+| `WORKER_INTERVAL` | `500ms` | Job poll interval |
+
+## API
+
+### Health & metrics
 
 - `GET /healthz`
+- `GET /metrics` — Prometheus
 
-Current API surface (subject to change as the engine evolves):
+### BPMN
 
-- `GET /healthz`
-- `POST /api/v1/workspaces/{workspaceID}/flows`
-- `GET /api/v1/workspaces/{workspaceID}/flows`
-- `GET /api/v1/workspaces/{workspaceID}/flows/{flowID}`
-- `PUT /api/v1/workspaces/{workspaceID}/flows/{flowID}/definition`
-- `POST /api/v1/workspaces/{workspaceID}/flows/{flowID}/runs`
-- `GET /api/v1/workspaces/{workspaceID}/flows/{flowID}/runs`
-- `GET /api/v1/workspaces/{workspaceID}/flows/{flowID}/runs/{runID}`
+- `PUT /api/v1/tenants/{tenantId}/processes/{key}` — deploy (creates new version)
+- `GET /api/v1/tenants/{tenantId}/processes` — list latest versions
+- `DELETE /api/v1/tenants/{tenantId}/processes/{key}`
+- `POST /api/v1/process-instances` — start instance
+- `GET /api/v1/process-instances/{id}`
+- `GET /api/v1/process-instances/{id}/activities`
+- `POST /api/v1/process-instances/{id}/tasks/{activityId}/complete`
+- `GET /api/v1/tasks?tenantId=demo&assignee=manager` — UserTask inbox
 
-These endpoints are backed by an in-memory store implementation and an engine that can:
+Complete task with optimistic lock:
 
-- Create/list flows
-- Attach a simple flow definition (nodes + edges + single entry node)
-- Start a manual run that synchronously walks the graph and executes supported node adapters:
-  - `log` adapter: logs a message and input
-  - `http` adapter: makes a simple HTTP request and records status code in the node output
+```json
+{ "variables": { "approved": true }, "lockVersion": 3 }
+```
 
+## ScriptTask
 
+- `set:key=value` — always available
+- `scriptLang: "javascript"` — executed via goja (`vars` / `variables` object in scope)
+
+## Tests
+
+```bash
+go test ./...
+```

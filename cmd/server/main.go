@@ -7,14 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"lowcode-automation/internal/api"
-	"lowcode-automation/internal/engine"
-	pgstore "lowcode-automation/internal/store/postgres"
+	"lowcode-bpmn/internal/api"
+	"lowcode-bpmn/internal/engine"
+	pgstore "lowcode-bpmn/internal/store/postgres"
 )
 
 func main() {
@@ -39,29 +40,39 @@ func main() {
 		log.Fatalf("failed to init postgres store: %v", err)
 	}
 
-	e := engine.NewEngine(store)
+	eng := engine.NewEngine(store, nil)
+	if getEnvBool("ASYNC_EXECUTION", false) {
+		eng.SetAsync(true)
+		log.Println("async execution enabled")
+	}
 
-	// inject engine into request context through middleware
-	router := api.NewHTTPRouter()
-	router = withEngineMiddleware(router, e)
+	workerCtx, workerCancel := context.WithCancel(rootCtx)
+	defer workerCancel()
+	worker := engine.NewWorker(eng, getEnvDuration("WORKER_INTERVAL", 500*time.Millisecond))
+	go worker.Run(workerCtx)
+
+	deps := api.RouterDeps{Engine: eng}
+	router := api.NewHTTPRouter(deps)
+	router = withEngineMiddleware(router, deps)
+	handler := withCORS(router)
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: router,
+		Handler: handler,
 	}
 
 	go func() {
-		log.Printf("HTTP server listening on %s\n", addr)
+		log.Printf("lowcode-bpmn listening on %s\n", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v\n", err)
 		}
 	}()
 
-	// graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
+	workerCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -71,11 +82,23 @@ func main() {
 	}
 }
 
-// withEngineMiddleware attaches the engine to each request context.
-func withEngineMiddleware(h http.Handler, e *engine.Engine) http.Handler {
+func withEngineMiddleware(h http.Handler, deps api.RouterDeps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := api.WithEngine(r.Context(), e)
+		ctx := api.WithEngine(r.Context(), deps.Engine)
 		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Tenant-Id, X-Tenant-ID, X-Requested-With")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -84,4 +107,28 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getEnvBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
+}
+
+func getEnvDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
 }

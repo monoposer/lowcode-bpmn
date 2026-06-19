@@ -1,0 +1,15 @@
+# Binaries
+/server
+/bin/
+*.exe
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Go
+*.test
+coverage.out

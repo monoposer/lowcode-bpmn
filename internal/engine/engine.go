@@ -3,328 +3,664 @@ package engine
 import (
 	"context"
 	"errors"
-	"log"
-	"net/http"
-	"strconv"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+
+	"lowcode-bpmn/internal/bpmn"
+	"lowcode-bpmn/internal/script"
 )
 
-// Store is the minimal persistence interface that the engine depends on.
-// It can be implemented by Postgres, in-memory store for tests, etc.
-type Store interface {
-	CreateFlow(ctx context.Context, f *Flow) error
-	UpdateFlow(ctx context.Context, f *Flow) error
-	GetFlow(ctx context.Context, id uuid.UUID) (*Flow, error)
-	ListFlows(ctx context.Context, workspaceID uuid.UUID) ([]*Flow, error)
-
-	CreateRun(ctx context.Context, r *Run) error
-	GetRun(ctx context.Context, id uuid.UUID) (*Run, error)
-	ListRunsByFlow(ctx context.Context, flowID uuid.UUID) ([]*Run, error)
-
-	CreateNodeExecution(ctx context.Context, ne *NodeExecution) error
-	ListNodeExecutionsByRun(ctx context.Context, runID uuid.UUID) ([]*NodeExecution, error)
-}
-
-// Engine is the main orchestration entry point.
+// Engine executes BPMN 2.0 process definitions.
 type Engine struct {
-	store Store
+	store  Store
+	script script.Runner
+	async  bool
 }
 
-// NewEngine constructs a new Engine with the given Store.
-func NewEngine(store Store) *Engine {
-	return &Engine{store: store}
-}
-
-// CreateFlow creates a new flow in the underlying store.
-func (e *Engine) CreateFlow(ctx context.Context, f *Flow) error {
-	if e == nil || e.store == nil {
-		return errors.New("engine: store is not configured")
+// NewEngine constructs a BPMN engine. Async execution is off by default (sync).
+func NewEngine(store Store, scriptExec script.Runner) *Engine {
+	if scriptExec == nil {
+		scriptExec = script.NewExecutor()
 	}
-	return e.store.CreateFlow(ctx, f)
+	return &Engine{store: store, script: scriptExec}
 }
 
-// UpdateFlow applies changes to an existing flow.
-func (e *Engine) UpdateFlow(ctx context.Context, f *Flow) error {
-	if e == nil || e.store == nil {
-		return errors.New("engine: store is not configured")
+// SetAsync enables background job execution for StartProcess and CompleteTask continuations.
+func (e *Engine) SetAsync(v bool) { e.async = v }
+
+// DeployProcess validates and stores a new BPMN definition version for a tenant.
+func (e *Engine) DeployProcess(ctx context.Context, tenantID, key string, def bpmn.ProcessDefinition) (*DeployedProcess, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
 	}
-	return e.store.UpdateFlow(ctx, f)
+	if tenantID == "" || key == "" {
+		return nil, errors.New("tenantID and process key are required")
+	}
+	if _, err := bpmn.BuildRegistry(def); err != nil {
+		return nil, fmt.Errorf("invalid process: %w", err)
+	}
+	now := time.Now().UTC()
+	dp := &DeployedProcess{
+		TenantID:   tenantID,
+		Key:        key,
+		Name:       def.Name,
+		Definition: def,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := e.store.InsertProcessVersion(ctx, dp); err != nil {
+		return nil, err
+	}
+	return dp, nil
 }
 
-// GetFlow fetches a flow by ID.
-func (e *Engine) GetFlow(ctx context.Context, id uuid.UUID) (*Flow, error) {
-	if e == nil || e.store == nil {
-		return nil, errors.New("engine: store is not configured")
+func (e *Engine) DeleteProcess(ctx context.Context, tenantID, key string) error {
+	if e.store == nil {
+		return errors.New("engine: store not configured")
 	}
-	return e.store.GetFlow(ctx, id)
+	return e.store.DeleteProcess(ctx, tenantID, key)
 }
 
-// ListFlows lists flows for a workspace.
-func (e *Engine) ListFlows(ctx context.Context, workspaceID uuid.UUID) ([]*Flow, error) {
-	if e == nil || e.store == nil {
-		return nil, errors.New("engine: store is not configured")
+func (e *Engine) ListProcesses(ctx context.Context, tenantID string) ([]*DeployedProcess, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
 	}
-	return e.store.ListFlows(ctx, workspaceID)
+	return e.store.ListProcesses(ctx, tenantID)
 }
 
-// StartRun creates a new run record for a given flow.
-// Execution of nodes will be implemented later; this is the minimal skeleton.
-func (e *Engine) StartRun(ctx context.Context, flowID, workspaceID uuid.UUID, input map[string]any) (*Run, error) {
-	if e == nil || e.store == nil {
-		return nil, errors.New("engine: store is not configured")
-	}
+type StartProcessRequest struct {
+	TenantID    string
+	ProcessKey  string
+	BusinessKey string
+	Variables   map[string]any
+}
 
-	// Ensure flow exists.
-	f, err := e.store.GetFlow(ctx, flowID)
+func (e *Engine) StartProcess(ctx context.Context, req StartProcessRequest) (*ProcessInstance, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
+	}
+	dp, err := e.store.GetProcess(ctx, req.TenantID, req.ProcessKey)
 	if err != nil {
 		return nil, err
 	}
-	if f == nil {
-		return nil, errors.New("engine: flow not found")
+	if dp == nil {
+		return nil, fmt.Errorf("process not found: %s/%s", req.TenantID, req.ProcessKey)
 	}
 
+	if e.async {
+		inst := e.newInstance(dp, req.BusinessKey, req.Variables)
+		inst.Status = ProcessStatusPending
+		err = e.store.WithTx(ctx, func(tx Store) error {
+			if err := tx.CreateProcessInstance(ctx, inst); err != nil {
+				return err
+			}
+			return tx.EnqueueJob(ctx, &Job{
+				ProcessInstanceID: inst.ID,
+				Type:              JobTypeStart,
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		return e.store.GetProcessInstance(ctx, inst.ID)
+	}
+
+	var inst *ProcessInstance
+	err = e.store.WithTx(ctx, func(tx Store) error {
+		runner := &Engine{store: tx, script: e.script, async: false}
+		var runErr error
+		inst, runErr = runner.startWithDefinition(ctx, dp, req.BusinessKey, req.Variables)
+		return runErr
+	})
+	if err != nil {
+		return inst, err
+	}
+	return e.store.GetProcessInstance(ctx, inst.ID)
+}
+
+func (e *Engine) StartProcessWithDefinition(ctx context.Context, tenantID, key, businessKey string, def bpmn.ProcessDefinition, vars map[string]any) (*ProcessInstance, error) {
+	dp := &DeployedProcess{TenantID: tenantID, Key: key, Version: 1, Definition: def}
+	return e.startWithDefinition(ctx, dp, businessKey, vars)
+}
+
+func (e *Engine) GetProcessInstance(ctx context.Context, id uuid.UUID) (*ProcessInstance, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
+	}
+	return e.store.GetProcessInstance(ctx, id)
+}
+
+func (e *Engine) ListActivities(ctx context.Context, processInstanceID uuid.UUID) ([]*ActivityInstance, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
+	}
+	return e.store.ListActivitiesByProcess(ctx, processInstanceID)
+}
+
+func (e *Engine) ListUserTasks(ctx context.Context, tenantID, assignee string) ([]*UserTask, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
+	}
+	return e.store.ListActiveUserTasks(ctx, tenantID, assignee)
+}
+
+func (e *Engine) ProcessNextJob(ctx context.Context) error {
+	job, err := e.store.ClaimNextJob(ctx)
+	if err != nil || job == nil {
+		return err
+	}
+
+	runErr := e.store.WithTx(ctx, func(tx Store) error {
+		runner := &Engine{store: tx, script: e.script, async: true}
+		switch job.Type {
+		case JobTypeStart:
+			return runner.runStartJob(ctx, job.ProcessInstanceID)
+		case JobTypeContinue:
+			elementID, _ := job.Payload["element_id"].(string)
+			if elementID == "" {
+				return errors.New("continue job missing element_id")
+			}
+			return runner.runContinueJob(ctx, job.ProcessInstanceID, elementID)
+		default:
+			return fmt.Errorf("unknown job type: %s", job.Type)
+		}
+	})
+
+	if runErr != nil {
+		_ = e.store.FailJob(ctx, job.ID, runErr.Error())
+		return runErr
+	}
+	return e.store.CompleteJob(ctx, job.ID)
+}
+
+func (e *Engine) newInstance(dp *DeployedProcess, businessKey string, vars map[string]any) *ProcessInstance {
 	now := time.Now().UTC()
-	run := &Run{
-		ID:          uuid.New(),
-		FlowID:      flowID,
-		WorkspaceID: workspaceID,
-		Status:      RunStatusRunning,
-		TriggerType: TriggerTypeManual,
-		Input:       input,
-		StartedAt:   &now,
+	return &ProcessInstance{
+		ID:                 uuid.New(),
+		TenantID:           dp.TenantID,
+		ProcessKey:         dp.Key,
+		ProcessVersion:     dp.Version,
+		BusinessKey:        businessKey,
+		Status:             ProcessStatusRunning,
+		Variables:          cloneVars(vars),
+		InternalState:      make(map[string]any),
+		DefinitionSnapshot: dp.Definition,
+		StartedAt:          now,
+		UpdatedAt:          now,
 	}
+}
 
-	if err := e.store.CreateRun(ctx, run); err != nil {
+func (e *Engine) startWithDefinition(ctx context.Context, dp *DeployedProcess, businessKey string, vars map[string]any) (*ProcessInstance, error) {
+	reg, err := bpmn.BuildRegistry(dp.Definition)
+	if err != nil {
+		return nil, err
+	}
+	inst := e.newInstance(dp, businessKey, vars)
+	if err := e.store.CreateProcessInstance(ctx, inst); err != nil {
 		return nil, err
 	}
 
-	// Execute the flow synchronously in this minimal implementation.
-	if err := e.executeFlow(ctx, f, run); err != nil {
-		run.Status = RunStatusFailed
-		run.ErrorMessage = err.Error()
-	} else {
-		run.Status = RunStatusSucceeded
+	state := &execState{inst: inst, reg: reg}
+	for _, startID := range reg.StartEvents {
+		if err := e.activateElement(ctx, state, startID); err != nil {
+			return e.failInstance(ctx, inst, err)
+		}
 	}
-	finished := time.Now().UTC()
-	run.FinishedAt = &finished
-
-	return run, nil
+	return e.store.GetProcessInstance(ctx, inst.ID)
 }
 
-// GetRun fetches a run by ID.
-func (e *Engine) GetRun(ctx context.Context, id uuid.UUID) (*Run, error) {
-	if e == nil || e.store == nil {
-		return nil, errors.New("engine: store is not configured")
+func (e *Engine) runStartJob(ctx context.Context, instanceID uuid.UUID) error {
+	inst, err := e.store.GetProcessInstanceForUpdate(ctx, instanceID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("instance not found: %s", instanceID)
 	}
-	return e.store.GetRun(ctx, id)
-}
-
-// ListRunsByFlow lists runs for a given flow.
-func (e *Engine) ListRunsByFlow(ctx context.Context, flowID uuid.UUID) ([]*Run, error) {
-	if e == nil || e.store == nil {
-		return nil, errors.New("engine: store is not configured")
+	reg, err := registryForInstance(inst)
+	if err != nil {
+		return err
 	}
-	return e.store.ListRunsByFlow(ctx, flowID)
-}
-
-// executeFlow is a very small synchronous executor that:
-// - walks nodes from the first entry node following edges sequentially
-// - executes supported adapters (log, http)
-// - supports simple condition nodes that branch based on BranchCondition
-func (e *Engine) executeFlow(ctx context.Context, f *Flow, run *Run) error {
-	if f.Definition == nil || len(f.Definition.Nodes) == 0 {
-		// nothing to do
-		return nil
+	inst.Status = ProcessStatusRunning
+	if err := e.store.UpdateProcessInstance(ctx, inst); err != nil {
+		return err
 	}
-
-	def := f.Definition
-	if len(def.EntryNodes) == 0 {
-		return errors.New("flow definition has no entry nodes")
+	state := &execState{inst: inst, reg: reg}
+	for _, startID := range reg.StartEvents {
+		if err := e.activateElement(ctx, state, startID); err != nil {
+			_, failErr := e.failInstance(ctx, inst, err)
+			return failErr
+		}
 	}
-
-	nodeByID := make(map[string]Node, len(def.Nodes))
-	for _, n := range def.Nodes {
-		nodeByID[n.ID] = n
-	}
-
-	// Build simple adjacency for a linear walk (ignores branches for now).
-	nextByFrom := make(map[string][]Edge)
-	for _, e := range def.Edges {
-		nextByFrom[e.FromNodeID] = append(nextByFrom[e.FromNodeID], e)
-	}
-
-	// Execution context: we keep per-node outputs.
-	nodeOutputs := make(map[string]map[string]any)
-
-	currentID := def.EntryNodes[0]
-	visited := make(map[string]bool)
-
-	for {
-		if visited[currentID] {
-			// prevent endless loops for now
-			break
-		}
-		visited[currentID] = true
-
-		node, ok := nodeByID[currentID]
-		if !ok {
-			return errors.New("node not found: " + currentID)
-		}
-
-		start := time.Now().UTC()
-		output, err := executeNode(ctx, node, run.Input, nodeOutputs)
-		end := time.Now().UTC()
-
-		status := RunStatusSucceeded
-		if err != nil {
-			status = RunStatusFailed
-		}
-
-		// persist node execution (best-effort, errors are logged only)
-		if e.store != nil {
-			ne := &NodeExecution{
-				ID:     uuid.New(),
-				RunID:  run.ID,
-				NodeID: node.ID,
-				Status: status,
-				Input:  run.Input,
-				Output: output,
-				ErrorMessage: func() string {
-					if err != nil {
-						return err.Error()
-					}
-					return ""
-				}(),
-				RetryCount: 0,
-				StartedAt:  &start,
-				FinishedAt: &end,
-			}
-			if errStore := e.store.CreateNodeExecution(ctx, ne); errStore != nil {
-				log.Printf("failed to persist node execution (node_id=%s): %v\n", node.ID, errStore)
-			}
-		}
-
-		if err != nil {
-			return err
-		}
-
-		nodeOutputs[node.ID] = output
-
-		var nextID string
-		if node.Type == NodeTypeCondition && len(node.Conditions) > 0 {
-			// evaluate branch conditions in order; pick the first that matches
-			for _, bc := range node.Conditions {
-				ok, evalErr := evalConditionExpression(bc.Expression, run.Input, nodeOutputs)
-				if evalErr != nil {
-					log.Printf("failed to evaluate condition expression '%s': %v\n", bc.Expression, evalErr)
-					continue
-				}
-				if ok {
-					nextID = bc.TargetNodeID
-					break
-				}
-			}
-		}
-
-		if nextID == "" {
-			edges := nextByFrom[node.ID]
-			if len(edges) == 0 {
-				break
-			}
-			// default: follow the first edge
-			nextID = edges[0].ToNodeID
-		}
-
-		currentID = nextID
-	}
-
 	return nil
 }
 
-// executeNode dispatches execution based on node.Adapter.
-func executeNode(ctx context.Context, node Node, runInput map[string]any, nodeOutputs map[string]map[string]any) (map[string]any, error) {
-	switch node.Adapter {
-	case "log":
-		msg, _ := node.Config["message"].(string)
-		log.Printf("[node=%s] %s input=%v\n", node.ID, msg, runInput)
-		return map[string]any{"logged": true}, nil
-	case "http":
-		url, _ := node.Config["url"].(string)
-		if url == "" {
-			return nil, errors.New("http node missing url")
-		}
-		method, _ := node.Config["method"].(string)
-		if method == "" {
-			method = http.MethodGet
-		}
-		req, err := http.NewRequestWithContext(ctx, method, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		return map[string]any{
-			"status_code": resp.StatusCode,
-		}, nil
-	default:
-		// no-op adapter
-		return map[string]any{}, nil
+func (e *Engine) runContinueJob(ctx context.Context, instanceID uuid.UUID, elementID string) error {
+	inst, err := e.store.GetProcessInstanceForUpdate(ctx, instanceID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("instance not found: %s", instanceID)
 	}
+	if inst.Status != ProcessStatusRunning {
+		return fmt.Errorf("process not running: %s", inst.Status)
+	}
+	reg, err := registryForInstance(inst)
+	if err != nil {
+		return err
+	}
+	state := &execState{inst: inst, reg: reg}
+	if err := e.completeElement(ctx, state, elementID); err != nil {
+		_, failErr := e.failInstance(ctx, inst, err)
+		return failErr
+	}
+	return nil
 }
 
-// evalConditionExpression evaluates a very small expression language:
-// - "<key> == <value>" where:
-//   - key: top-level key in runInput, e.g. "country"
-//   - value: string or number literal (quotes optional for plain words)
-func evalConditionExpression(expr string, runInput map[string]any, nodeOutputs map[string]map[string]any) (bool, error) {
-	expr = strings.TrimSpace(expr)
-	if expr == "" {
-		return false, nil
+func (e *Engine) CompleteTask(ctx context.Context, req CompleteTaskRequest) (*ProcessInstance, error) {
+	inst, err := e.store.GetProcessInstance(ctx, req.ProcessInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, errors.New("process instance not found")
+	}
+	if inst.Status != ProcessStatusRunning {
+		return nil, fmt.Errorf("process not running: %s", inst.Status)
+	}
+	if req.LockVersion > 0 && req.LockVersion != inst.LockVersion {
+		return nil, ErrVersionConflict
 	}
 
-	parts := strings.SplitN(expr, "==", 2)
-	if len(parts) != 2 {
-		return false, errors.New("unsupported expression, expected 'field == value'")
+	act, err := e.store.GetActivityInstance(ctx, req.ActivityID)
+	if err != nil {
+		return nil, err
 	}
-	left := strings.TrimSpace(parts[0])
-	right := strings.TrimSpace(parts[1])
-
-	if left == "" {
-		return false, errors.New("empty left-hand side")
+	if act == nil {
+		return nil, errors.New("activity instance not found")
+	}
+	if act.ProcessInstanceID != inst.ID {
+		return nil, errors.New("activity does not belong to process instance")
+	}
+	if act.Status != ActivityStatusActive {
+		return nil, fmt.Errorf("activity not active: %s", act.Status)
+	}
+	if act.ElementKind != bpmn.KindUserTask {
+		return nil, fmt.Errorf("element is not a userTask: %s", act.ElementKind)
 	}
 
-	// strip quotes
-	right = strings.Trim(right, "\"'")
+	for k, v := range req.Variables {
+		inst.Variables[k] = v
+	}
+	if inst.InternalState == nil {
+		inst.InternalState = make(map[string]any)
+	}
 
-	v, ok := runInput[left]
+	now := time.Now().UTC()
+	act.Status = ActivityStatusCompleted
+	act.EndedAt = &now
+	act.Output = cloneVars(req.Variables)
+	elementID := act.ElementID
+
+	if e.async {
+		err = e.store.WithTx(ctx, func(tx Store) error {
+			if err := tx.UpdateActivityInstance(ctx, act); err != nil {
+				return err
+			}
+			inst.ActiveElements = removeString(inst.ActiveElements, elementID)
+			if err := tx.UpdateProcessInstance(ctx, inst); err != nil {
+				return err
+			}
+			return tx.EnqueueJob(ctx, &Job{
+				ProcessInstanceID: inst.ID,
+				Type:              JobTypeContinue,
+				Payload:           map[string]any{"element_id": elementID},
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+		return e.store.GetProcessInstance(ctx, inst.ID)
+	}
+
+	reg, err := registryForInstance(inst)
+	if err != nil {
+		return nil, err
+	}
+
+	var result *ProcessInstance
+	err = e.store.WithTx(ctx, func(tx Store) error {
+		runner := &Engine{store: tx, script: e.script, async: false}
+		if err := tx.UpdateActivityInstance(ctx, act); err != nil {
+			return err
+		}
+		state := &execState{inst: inst, reg: reg}
+		if err := runner.completeElement(ctx, state, elementID); err != nil {
+			_, failErr := runner.failInstance(ctx, inst, err)
+			return failErr
+		}
+		var getErr error
+		result, getErr = tx.GetProcessInstance(ctx, inst.ID)
+		return getErr
+	})
+	if err != nil {
+		return result, err
+	}
+	return e.store.GetProcessInstance(ctx, inst.ID)
+}
+
+func registryForInstance(inst *ProcessInstance) (*bpmn.Registry, error) {
+	if inst.DefinitionSnapshot.ID == "" && len(inst.DefinitionSnapshot.Elements) == 0 {
+		return nil, errors.New("process definition snapshot missing on instance")
+	}
+	return bpmn.BuildRegistry(inst.DefinitionSnapshot)
+}
+
+type execState struct {
+	inst *ProcessInstance
+	reg  *bpmn.Registry
+}
+
+func (e *Engine) activateElement(ctx context.Context, state *execState, elementID string) error {
+	el, ok := state.reg.Element(elementID)
 	if !ok {
-		return false, nil
+		return fmt.Errorf("element not found: %s", elementID)
 	}
 
-	switch actual := v.(type) {
-	case string:
-		return actual == right, nil
-	case float64:
-		r, err := strconv.ParseFloat(right, 64)
-		if err != nil {
-			return false, err
+	now := time.Now().UTC()
+	act := &ActivityInstance{
+		ID:                uuid.New(),
+		ProcessInstanceID: state.inst.ID,
+		ElementID:         elementID,
+		ElementKind:       el.Kind,
+		Status:            ActivityStatusActive,
+		Assignees:         el.Assignees,
+		Input:             cloneVars(state.inst.Variables),
+		StartedAt:         now,
+	}
+	if err := e.store.CreateActivityInstance(ctx, act); err != nil {
+		return err
+	}
+
+	switch el.Kind {
+	case bpmn.KindStartEvent:
+		act.Status = ActivityStatusCompleted
+		end := time.Now().UTC()
+		act.EndedAt = &end
+		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+			return err
 		}
-		return actual == r, nil
-	case int:
-		r, err := strconv.Atoi(right)
-		if err != nil {
-			return false, err
+		return e.completeElement(ctx, state, elementID)
+
+	case bpmn.KindEndEvent:
+		act.Status = ActivityStatusCompleted
+		end := time.Now().UTC()
+		act.EndedAt = &end
+		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+			return err
 		}
-		return actual == r, nil
+		return e.tryCompleteProcess(ctx, state)
+
+	case bpmn.KindScriptTask:
+		out, err := e.script.Run(ctx, el.Script, el.ScriptLang, state.inst.Variables)
+		if err != nil {
+			act.Status = ActivityStatusFailed
+			act.ErrorMsg = err.Error()
+			end := time.Now().UTC()
+			act.EndedAt = &end
+			_ = e.store.UpdateActivityInstance(ctx, act)
+			return err
+		}
+		for k, v := range out {
+			state.inst.Variables[k] = v
+		}
+		state.inst.UpdatedAt = time.Now().UTC()
+		if err := e.store.UpdateProcessInstance(ctx, state.inst); err != nil {
+			return err
+		}
+		act.Status = ActivityStatusCompleted
+		act.Output = out
+		end := time.Now().UTC()
+		act.EndedAt = &end
+		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+			return err
+		}
+		return e.completeElement(ctx, state, elementID)
+
+	case bpmn.KindUserTask:
+		if el.AutoComplete {
+			act.Status = ActivityStatusCompleted
+			end := time.Now().UTC()
+			act.EndedAt = &end
+			if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+				return err
+			}
+			return e.completeElement(ctx, state, elementID)
+		}
+		state.inst.ActiveElements = appendUnique(state.inst.ActiveElements, elementID)
+		state.inst.UpdatedAt = time.Now().UTC()
+		return e.store.UpdateProcessInstance(ctx, state.inst)
+
+	case bpmn.KindExclusiveGateway, bpmn.KindParallelGateway, bpmn.KindInclusiveGateway:
+		act.Status = ActivityStatusCompleted
+		end := time.Now().UTC()
+		act.EndedAt = &end
+		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+			return err
+		}
+		return e.completeElement(ctx, state, elementID)
+
 	default:
-		return false, nil
+		return fmt.Errorf("unsupported element kind: %s", el.Kind)
 	}
 }
 
+func (e *Engine) completeElement(ctx context.Context, state *execState, elementID string) error {
+	el, ok := state.reg.Element(elementID)
+	if !ok {
+		return fmt.Errorf("element not found: %s", elementID)
+	}
 
+	state.inst.ActiveElements = removeString(state.inst.ActiveElements, elementID)
+	state.inst.UpdatedAt = time.Now().UTC()
+	if err := e.store.UpdateProcessInstance(ctx, state.inst); err != nil {
+		return err
+	}
+
+	outgoing := state.reg.OutgoingFlows(elementID)
+	if len(outgoing) == 0 {
+		if state.reg.IsEndEvent(elementID) {
+			return e.tryCompleteProcess(ctx, state)
+		}
+		return nil
+	}
+
+	switch el.Kind {
+	case bpmn.KindExclusiveGateway:
+		return e.followExclusive(ctx, state, outgoing)
+	case bpmn.KindParallelGateway:
+		return e.followAll(ctx, state, outgoing)
+	case bpmn.KindInclusiveGateway:
+		if len(state.reg.IncomingFlows(elementID)) <= 1 {
+			return e.followInclusive(ctx, state, outgoing)
+		}
+		return e.followAll(ctx, state, outgoing)
+	default:
+		if len(outgoing) > 1 {
+			return fmt.Errorf("element %s has multiple outgoing flows but is not a gateway", elementID)
+		}
+		return e.activateViaFlow(ctx, state, outgoing[0])
+	}
+}
+
+func (e *Engine) activateViaFlow(ctx context.Context, state *execState, flow bpmn.SequenceFlow) error {
+	targetID := flow.TargetRef
+	if state.reg.IsJoinGateway(targetID) {
+		incoming := state.reg.IncomingFlows(targetID)
+		if len(incoming) > 1 {
+			if state.inst.InternalState == nil {
+				state.inst.InternalState = make(map[string]any)
+			}
+			key := joinArrivalsKey(targetID)
+			arrived := toStringSet(state.inst.InternalState[key])
+			arrived[flow.ID] = struct{}{}
+			state.inst.InternalState[key] = stringSetKeys(arrived)
+			if len(arrived) < len(incoming) {
+				state.inst.UpdatedAt = time.Now().UTC()
+				return e.store.UpdateProcessInstance(ctx, state.inst)
+			}
+			delete(state.inst.InternalState, key)
+		}
+	}
+	return e.activateElement(ctx, state, targetID)
+}
+
+func (e *Engine) followExclusive(ctx context.Context, state *execState, flows []bpmn.SequenceFlow) error {
+	var defaultFlow *bpmn.SequenceFlow
+	for i := range flows {
+		f := &flows[i]
+		if f.IsDefault {
+			defaultFlow = f
+			continue
+		}
+		if f.Condition == "" {
+			defaultFlow = f
+			continue
+		}
+		ok, err := bpmn.EvalCondition(f.Condition, state.inst.Variables)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return e.activateViaFlow(ctx, state, *f)
+		}
+	}
+	if defaultFlow != nil {
+		return e.activateViaFlow(ctx, state, *defaultFlow)
+	}
+	return errors.New("exclusive gateway: no matching outgoing flow")
+}
+
+func (e *Engine) followInclusive(ctx context.Context, state *execState, flows []bpmn.SequenceFlow) error {
+	var matched []bpmn.SequenceFlow
+	var defaultFlow *bpmn.SequenceFlow
+	for _, f := range flows {
+		if f.IsDefault {
+			defaultFlow = &f
+			continue
+		}
+		ok, err := bpmn.EvalCondition(f.Condition, state.inst.Variables)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = append(matched, f)
+		}
+	}
+	if len(matched) == 0 {
+		if defaultFlow != nil {
+			return e.activateViaFlow(ctx, state, *defaultFlow)
+		}
+		return errors.New("inclusive gateway: no matching outgoing flow")
+	}
+	for _, f := range matched {
+		if err := e.activateViaFlow(ctx, state, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) followAll(ctx context.Context, state *execState, flows []bpmn.SequenceFlow) error {
+	for _, f := range flows {
+		if err := e.activateViaFlow(ctx, state, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) tryCompleteProcess(ctx context.Context, state *execState) error {
+	active, err := e.store.ListActiveActivities(ctx, state.inst.ID)
+	if err != nil {
+		return err
+	}
+	if len(active) > 0 {
+		return nil
+	}
+	if len(state.inst.ActiveElements) > 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	state.inst.Status = ProcessStatusCompleted
+	state.inst.EndedAt = &now
+	state.inst.UpdatedAt = now
+	state.inst.ActiveElements = nil
+	return e.store.UpdateProcessInstance(ctx, state.inst)
+}
+
+func (e *Engine) failInstance(ctx context.Context, inst *ProcessInstance, err error) (*ProcessInstance, error) {
+	now := time.Now().UTC()
+	inst.Status = ProcessStatusFailed
+	inst.ErrorMsg = err.Error()
+	inst.EndedAt = &now
+	inst.UpdatedAt = now
+	_ = e.store.UpdateProcessInstance(ctx, inst)
+	return inst, err
+}
+
+func joinArrivalsKey(gatewayID string) string {
+	return "join_arrivals_" + gatewayID
+}
+
+func toStringSet(v any) map[string]struct{} {
+	out := make(map[string]struct{})
+	switch t := v.(type) {
+	case []any:
+		for _, item := range t {
+			if s, ok := item.(string); ok {
+				out[s] = struct{}{}
+			}
+		}
+	case []string:
+		for _, s := range t {
+			out[s] = struct{}{}
+		}
+	}
+	return out
+}
+
+func stringSetKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func cloneVars(m map[string]any) map[string]any {
+	if m == nil {
+		return make(map[string]any)
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func appendUnique(list []string, s string) []string {
+	for _, v := range list {
+		if v == s {
+			return list
+		}
+	}
+	return append(list, s)
+}
+
+func removeString(list []string, s string) []string {
+	out := list[:0]
+	for _, v := range list {
+		if v != s {
+			out = append(out, v)
+		}
+	}
+	return out
+}
