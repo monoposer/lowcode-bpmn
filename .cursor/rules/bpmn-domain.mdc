@@ -76,7 +76,7 @@ See [docs/plugins.md](../../docs/plugins.md).
 
 | Env | Role |
 |-----|------|
-| `EVENT_CONSUMER` | `memory` \| `redis` \| `none` |
+| `EVENT_CONSUMER` | `memory` \| `redis` \| `kafka` \| `nats` \| `rabbitmq` \| `none` |
 | `PLUGIN_ASSIGNEE_ADAPTERS` | Assignee stream (HR sync) |
 | `PLUGIN_TRIGGER_ADAPTERS` | Trigger stream (process start) |
 | `PLUGIN_TASK_ADAPTERS` | Task stream (approve / reject) |

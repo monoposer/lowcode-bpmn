@@ -69,9 +69,12 @@ See [plugins/wasm/example-echo/README.md](../plugins/wasm/example-echo/README.md
 
 | Env | Default |
 |-----|---------|
-| `EVENT_CONSUMER` | `memory` |
-| `EVENT_REDIS_URL` | (required when `redis`) |
-| `EVENT_REDIS_*_KEY` | `bpmn:events:{stream}` |
+| `EVENT_CONSUMER` | `memory` — also `redis`, `kafka`, `nats`, `rabbitmq`, `none` |
+| `EVENT_BROKER_URL` | Driver connection URL |
+| `EVENT_{STREAM}_DEST` | Per-stream topic / subject / queue / redis key |
+| `EVENT_{DRIVER}_*` | Driver options (e.g. `EVENT_KAFKA_GROUP_ID`) |
+
+Legacy: `EVENT_REDIS_URL`, `EVENT_REDIS_*_KEY` when `EVENT_CONSUMER=redis`.
 
 Production HA: `docker compose --profile db --profile redis up -d` with `EVENT_CONSUMER=redis`.
 

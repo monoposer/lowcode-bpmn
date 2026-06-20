@@ -73,8 +73,8 @@ func LoadConfigFromEnv() Config {
 func BootstrapFromEngine(ctx context.Context, eng *engine.Engine, cfg Config) (*Bootstrap, error) {
 	host := NewHost(eng)
 	ccfg := cfg.Consumer
-	if ccfg.Kind == "" {
-		ccfg.Kind = cfg.ConsumerKind
+	if ccfg.Driver == "" {
+		ccfg.Driver = cfg.ConsumerKind
 	}
 	streams, err := setup.NewStreams(ccfg)
 	if err != nil {
