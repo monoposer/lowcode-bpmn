@@ -22,7 +22,7 @@ type Action struct {
 	ProcessInstanceID string         `json:"process_instance_id,omitempty"`
 	ActivityID        string         `json:"activity_id,omitempty"`
 	Assignee          string         `json:"assignee,omitempty"`
-	Action            string         `json:"action,omitempty"` // approve | reject
+	Action            string         `json:"action,omitempty"`
 	Comment           string         `json:"comment,omitempty"`
 	LockVersion       int            `json:"lock_version,omitempty"`
 	ScopeID           string         `json:"scope_id,omitempty"`

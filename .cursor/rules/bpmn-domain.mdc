@@ -80,8 +80,9 @@ See [docs/plugins.md](../../docs/plugins.md).
 | `PLUGIN_ASSIGNEE_ADAPTERS` | Assignee stream (HR sync) |
 | `PLUGIN_TRIGGER_ADAPTERS` | Trigger stream (process start) |
 | `PLUGIN_TASK_ADAPTERS` | Task stream (approve / reject) |
+| `PLUGIN_CONTROL_ADAPTERS` | Control stream (terminate) |
 | `PLUGIN_WASM_DIR` | WASM + capability sandbox |
 
-Ingress: `POST /api/v1/events/assignee/{source}`, `POST /api/v1/events/trigger/{source}`, `POST /api/v1/events/task/{source}`.
+Ingress: `POST /api/v1/events/assignee/{source}`, `/trigger/{source}`, `/task/{source}`, `/control/{source}`.
 
 Activity fields: `scope_id`, `branch_flow_id`, `outcome` (`approve`|`reject`|`cancelled`).

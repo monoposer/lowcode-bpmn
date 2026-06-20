@@ -188,6 +188,22 @@ func (s *Store) GetProcessInstanceForUpdate(ctx context.Context, id uuid.UUID) (
 	return s.GetProcessInstance(ctx, id)
 }
 
+func (s *Store) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, processKey, businessKey string) (*engine.ProcessInstance, error) {
+	if businessKey == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.processInstances {
+		if inst.TenantID == tenantID && inst.ProcessKey == processKey &&
+			inst.BusinessKey == businessKey && inst.Status == engine.ProcessStatusRunning {
+			copy := *inst
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *Store) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

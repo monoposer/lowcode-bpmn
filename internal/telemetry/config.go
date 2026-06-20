@@ -1,9 +1,9 @@
 package telemetry
 
 import (
-	"os"
-	"strconv"
 	"strings"
+
+	"github.com/monoposer/lowcode-bpmn/pkg/env"
 )
 
 // Config holds logging and OpenTelemetry settings.
@@ -18,29 +18,10 @@ type Config struct {
 // LoadConfig reads telemetry settings from environment variables.
 func LoadConfig() Config {
 	return Config{
-		ServiceName:    envOr("OTEL_SERVICE_NAME", "lowcode-bpmn"),
-		ServiceVersion: envOr("SERVICE_VERSION", "dev"),
-		LogLevel:       strings.ToLower(envOr("LOG_LEVEL", "info")),
-		LogFormat:      strings.ToLower(envOr("LOG_FORMAT", "json")),
-		OTelEnabled:    envBool("OTEL_ENABLED", false),
+		ServiceName:    env.Get("OTEL_SERVICE_NAME", "lowcode-bpmn"),
+		ServiceVersion: env.Get("SERVICE_VERSION", "dev"),
+		LogLevel:       strings.ToLower(env.Get("LOG_LEVEL", "info")),
+		LogFormat:      strings.ToLower(env.Get("LOG_FORMAT", "json")),
+		OTelEnabled:    env.Bool("OTEL_ENABLED", false),
 	}
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func envBool(key string, def bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return def
-	}
-	return b
 }

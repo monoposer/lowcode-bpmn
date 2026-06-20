@@ -12,6 +12,7 @@ const (
 	StreamAssignee Stream = "assignee" // HR / org change → assignee sync
 	StreamTrigger  Stream = "trigger"  // webhooks → message start / process start
 	StreamTask     Stream = "task"     // external approve / reject → CompleteTask
+	StreamControl  Stream = "control"  // terminate / admin control
 )
 
 // InboundEvent is a transport-agnostic envelope delivered to adapter plugins.
@@ -50,10 +51,11 @@ type RouterPublisher struct {
 	assignee Consumer
 	trigger  Consumer
 	task     Consumer
+	control  Consumer
 }
 
-func NewRouterPublisher(assignee, trigger, task Consumer) *RouterPublisher {
-	return &RouterPublisher{assignee: assignee, trigger: trigger, task: task}
+func NewRouterPublisher(assignee, trigger, task, control Consumer) *RouterPublisher {
+	return &RouterPublisher{assignee: assignee, trigger: trigger, task: task, control: control}
 }
 
 func (r *RouterPublisher) Publish(ctx context.Context, stream Stream, evt InboundEvent) error {
@@ -76,6 +78,11 @@ func (r *RouterPublisher) Publish(ctx context.Context, stream Stream, evt Inboun
 			return ErrStreamDisabled
 		}
 		return r.task.Publish(ctx, evt)
+	case StreamControl:
+		if r.control == nil {
+			return ErrStreamDisabled
+		}
+		return r.control.Publish(ctx, evt)
 	default:
 		return ErrUnknownStream
 	}

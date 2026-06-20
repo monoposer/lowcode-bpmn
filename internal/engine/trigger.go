@@ -70,6 +70,27 @@ func (e *Engine) TriggerMessage(ctx context.Context, req TriggerMessageRequest) 
 			if bk == "" && el.EventDefinition != nil {
 				bk = bpmn.BusinessKeyFromCorrelation(req.Variables, el.EventDefinition.CorrelationKey)
 			}
+			if bk != "" {
+				existing, findErr := e.store.FindRunningInstanceByBusinessKey(ctx, req.TenantID, dp.Key, bk)
+				if findErr != nil {
+					result.Matches = append(result.Matches, TriggerMessageMatch{
+						ProcessKey:     dp.Key,
+						StartElementID: el.ID,
+						Error:          findErr.Error(),
+					})
+					continue
+				}
+				if existing != nil {
+					result.Matches = append(result.Matches, TriggerMessageMatch{
+						ProcessKey:     dp.Key,
+						StartElementID: el.ID,
+						InstanceID:     existing.ID.String(),
+						Skipped:        true,
+						SkipReason:     "idempotent_duplicate",
+					})
+					continue
+				}
+			}
 			inst, startErr := e.StartProcess(ctx, StartProcessRequest{
 				TenantID:        req.TenantID,
 				ProcessKey:      dp.Key,

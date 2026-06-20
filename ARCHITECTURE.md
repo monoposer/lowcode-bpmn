@@ -30,7 +30,7 @@ flowchart TB
         BPMN["internal/bpmn"]
         Script["internal/script"]
         Plugin["internal/plugin"]
-        Event["internal/event"]
+        Event["pkg/event"]
         Store["engine.Store"]
         GORM["gormstore"]
         File["filestore"]
@@ -40,7 +40,7 @@ flowchart TB
     subgraph Plugins["plugins/ (external)"]
         GoPlug["go/feishu, wecom, airtable, …"]
         WasmPlug["wasm/* + capability manifest"]
-        SDK["sdk + registry"]
+        SDK["pkg/plugin/sdk + registry"]
     end
 
     DB[(PostgreSQL / MySQL / SQLite)]
@@ -71,7 +71,7 @@ flowchart TB
 2. Open **store** via `store.Open` (`STORE_BACKEND=db|file|memory`; DB drivers: postgres, mysql, sqlite)
 3. Create `engine.Engine`; optionally enable async execution (`ASYNC_EXECUTION=true`)
 4. **Plugin bootstrap** — triple event consumers + Go/WASM adapters (`plugin.BootstrapFromEngine`)
-5. Start **three stream consumers** (assignee / trigger / task) and background **job worker**
+5. Start **four stream consumers** (assignee / trigger / task / control) and background **job worker**
 6. Mount Chi HTTP routes, CORS, metrics, graceful shutdown
 
 ## BPMN 2.0 model
@@ -193,6 +193,7 @@ GORM store (`internal/store/gormstore`) applies schema via **AutoMigrate** on st
 | `POST /api/v1/events/assignee/{source}` | Plugin ingress — HR / org change stream |
 | `POST /api/v1/events/trigger/{source}` | Plugin ingress — process start stream |
 | `POST /api/v1/events/task/{source}` | Plugin ingress — approve / reject stream |
+| `POST /api/v1/events/control/{source}` | Plugin ingress — terminate / admin control |
 
 All handlers go through `engine.Engine` (no global store singleton).
 
@@ -251,15 +252,16 @@ POST /api/v1/triggers/message
 
 Full reference: [docs/plugins.md](./docs/plugins.md), [plugins/README.md](./plugins/README.md).
 
-### Triple streams
+### Quad streams
 
-Three independent consumers decouple extension concerns:
+Four independent consumers decouple extension concerns:
 
 | Stream | Purpose | Example adapters | Host SDK |
 |--------|---------|------------------|----------|
 | **assignee** | HR / org change | feishu, wecom, generic | `RemoveUserFromActiveTasks`, `ReplaceTaskAssignees` |
 | **trigger** | Process start | airtable, feishu, generic | `TriggerMessage`, `StartProcess` |
-| **task** | External approve/reject | feishu, wecom, generic | `CompleteTask`, `Terminate` |
+| **task** | External approve/reject | feishu, wecom, generic | `CompleteTask` |
+| **control** | Terminate / admin | generic, canonical | `Terminate` |
 
 ```
 External event
@@ -272,11 +274,12 @@ External event
 
 | Layer | Package | Role |
 |-------|---------|------|
-| Consumer | `internal/event`, `internal/event/setup` | Transport abstraction (memory, redis) |
-| Host SDK | `internal/plugin/contract`, `internal/plugin/host.go` | Capability-gated read/write API |
+| Consumer | `pkg/event`, `pkg/event/setup` | Transport abstraction (memory, redis) |
+| Host contract | `pkg/plugin/contract` | Plugin-facing Host interface + DTOs |
+| Host adapter | `internal/plugin/host.go` | Maps contract DTOs → engine |
 | Go plugins | `plugins/go/*`, `plugins/registry` | Native vendor adapters |
 | WASM plugins | `plugins/wasm/*` | Sandboxed adapters with `plugin.json` capabilities |
-| Shared SDK | `plugins/sdk` | `Action` schema + `Apply*` helpers |
+| Shared SDK | `pkg/plugin/sdk` | `Action` schema + `Apply*` helpers |
 | Ingress | `POST /api/v1/events/{assignee\|trigger\|task}/{source}` | HTTP → stream publisher |
 
 ### Configuration
@@ -288,6 +291,7 @@ External event
 | `PLUGIN_ASSIGNEE_ADAPTERS` | generic, canonical, feishu, wecom | Registry keys |
 | `PLUGIN_TRIGGER_ADAPTERS` | … + airtable | |
 | `PLUGIN_TASK_ADAPTERS` | generic, canonical, feishu, wecom | |
+| `PLUGIN_CONTROL_ADAPTERS` | generic, canonical | terminate stream |
 | `PLUGIN_WASM_DIR` | (optional) | Loads `*/plugin.json` + `plugin.wasm` |
 | `PLUGIN_DEFAULT_TENANT` | `demo` | Adapter fallback tenant |
 
@@ -307,18 +311,21 @@ Instances carry `lock_version`. Clients may pass `lockVersion` when completing a
 
 ```
 cmd/server/                 HTTP entrypoint + worker + plugin consumers
-internal/api/               Chi routes, metrics, OTel middleware
+internal/api/               Chi routes (router, processes, instances, tasks), metrics, auth
 internal/bpmn/              Model, validation, expressions, approval
 internal/engine/            Engine, worker, Store interface, trigger/reject
-internal/event/             Stream model, memory/redis consumers
-internal/plugin/            Host SDK, runtime, bootstrap (no vendor code)
+internal/plugin/            Runtime, bootstrap, WASM loader (no vendor code)
 internal/script/            Runner (goja JS + set DSL)
 internal/store/             Backend factory (db / file / memory)
-internal/store/gormstore/   GORM persistence + AutoMigrate
+internal/store/gormstore/   GORM persistence + migrations
 internal/store/filestore/   YAML file persistence
 internal/store/memory/      In-memory store (tests)
 internal/telemetry/         Logging + OpenTelemetry
-plugins/sdk/                Action + Apply* for Go plugins
+pkg/env/                    Environment variable helpers
+pkg/event/                  Stream model, memory/redis consumers
+pkg/plugin/contract/        Host interface + plugin DTOs
+pkg/plugin/sdk/             Action + Apply* for Go plugins
+pkg/vars/                   Variable path resolution helpers
 plugins/registry/           Name → adapter lookup
 plugins/go/                 feishu, wecom, airtable, generic, canonical
 plugins/wasm/               WASM sandbox plugins
@@ -332,7 +339,7 @@ schemas/                    JSON Schema for definitions and adapter actions
 | Area | Notes |
 |------|-------|
 | **Single engine** | One BPMN mental model; no legacy orchestration paths |
-| **Pluggable ingress** | Triple streams + Go/WASM adapters without engine forks |
+| **Pluggable ingress** | Quad streams + Go/WASM adapters without engine forks |
 | **Capability sandbox** | WASM host imports gated by manifest (Paca-style) |
 | **Multi-store** | Postgres / MySQL / SQLite / file / memory via one interface |
 | **JSON-first** | Designer-friendly; no XML BPMN required |
@@ -346,36 +353,35 @@ schemas/                    JSON Schema for definitions and adapter actions
 
 | Item | Status |
 |------|--------|
-| Authentication / authorization | Not implemented — terminate at API gateway or add middleware |
+| Authentication / authorization | Optional API keys via `API_KEY` / `API_KEYS`; set `AUTH_REQUIRED=true` in production |
 | Boundary events / call activity | Not supported |
 | Timer start | Metadata only; external scheduler required |
 | Script sandbox | goja with basic isolation; harden for untrusted scripts |
-| Event consumer | In-memory default is single-process; use Redis for replicas |
-| Business-key deduplication | No guard against duplicate starts for same `businessKey` |
-| WASM host I/O | Fixed output buffers for some read APIs; size limits TBD |
-| GORM AutoMigrate | No versioned SQL migrations; schema evolves with models |
+| Event consumer | In-memory default is single-process; Redis supported (`EVENT_CONSUMER=redis`) |
+| Business-key deduplication | Message trigger dedupes running instances by `(tenant, processKey, businessKey)` |
+| WASM host I/O | Read exports enforce `outMaxLen`; returns 413 when buffer too small |
+| GORM schema | Versioned SQL baseline on Postgres + AutoMigrate for model drift |
 
-## Recommendations
+## Production checklist
 
-Production and evolution priorities, ordered by impact:
-
-1. **Auth at the edge** — API keys or JWT in reverse proxy / middleware before exposing `/events/*` and `/process-instances/*`.
-2. **Redis event transport** — set `EVENT_CONSUMER=redis` when running multiple API replicas so webhook ingress and consumers stay consistent.
-3. **Idempotent message start** — dedupe by `(tenantId, messageRef, businessKey)` or correlation key to avoid double-starts from webhook retries.
-4. **Enable OTEL in prod** — `OTEL_ENABLED=true` with a collector; HTTP middleware is already wired.
-5. **Split hot plugins** — move high-churn adapters (`plugins/go/feishu`, etc.) to separate Go modules for independent release cycles.
-6. **Versioned DB migrations** — replace or supplement AutoMigrate with explicit migration files before multi-tenant production.
-7. **Plugin contract tests** — golden-file tests per adapter against `schemas/adapter-action.schema.json` and sample vendor payloads.
-8. **Control stream (future)** — today `terminate` shares the task stream; a dedicated control consumer would isolate admin/cancel traffic.
+| Item | Configuration |
+|------|----------------|
+| API auth | `AUTH_REQUIRED=true`, `API_KEY` or `API_KEYS=tenant:key,...` |
+| HA event ingress | `EVENT_CONSUMER=redis`, `EVENT_REDIS_URL`, compose `--profile redis` |
+| Idempotent webhooks | Automatic when `businessKey` / `correlationKey` resolves |
+| Tracing | `OTEL_ENABLED=true`, compose `--profile otel` |
+| Independent plugins | `go.work` + `plugins/go/{feishu,wecom,airtable}/go.mod` |
+| DB migrations | Postgres: embedded `gormstore/migrations/*.sql` then AutoMigrate |
+| Plugin regression | `plugins/go/*/testdata` contract tests |
+| Control plane | `PLUGIN_CONTROL_ADAPTERS`, `POST /events/control/{source}` |
 
 ## Future enhancements
 
-- Built-in auth middleware (tenant-scoped API keys)
-- Idempotent start by `businessKey` / correlation key
+- JWT authentication alongside API keys
 - Webhooks or SSE for task created / process completed
 - Stronger script + WASM sandbox (memory limits, no network)
 - Kafka/NATS `event.Consumer` implementation
-- Explicit SQL migrations alongside GORM models
+- Versioned migrations for MySQL / SQLite
 
 ## Maturity summary
 
@@ -383,5 +389,5 @@ Production and evolution priorities, ordered by impact:
 |-----------|------------|
 | **Purpose** | Clear, embeddable BPMN microservice for low-code / IM-integrated platforms |
 | **Code quality** | Focused layout; engine + plugin paths covered by unit tests |
-| **Production readiness** | Beta — add auth, Redis events for HA, and migration strategy before untrusted multi-tenant use |
-| **Highlights** | Version pinning, triple plugin streams, approval modes, async worker, multi-store, metrics + optional traces |
+| **Production readiness** | Beta — enable `AUTH_REQUIRED`, Redis events, and OTEL for multi-tenant production |
+| **Highlights** | Version pinning, quad plugin streams, idempotent triggers, API keys, multi-store, metrics + traces |

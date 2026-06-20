@@ -16,9 +16,9 @@ Guest imports module **`bpmn_host`**:
 | `replace_assignees` | `replace_assignees` | ptr, len | status code |
 | `complete_task` | `complete_task` | ptr, len | status code |
 | `terminate` | `terminate` | ptr, len | status code |
-| `list_tasks` | `read_tasks` | tenant ptr/len, assignee ptr/len, out ptr | status code |
-| `get_process_instance` | `read_instances` | id ptr/len, out ptr | status code |
-| `list_activities` | `read_activities` | id ptr/len, out ptr | status code |
+| `list_tasks` | `read_tasks` | tenant ptr/len, assignee ptr/len, out ptr, **out max len** | status code |
+| `get_process_instance` | `read_instances` | id ptr/len, out ptr, **out max len** | status code |
+| `list_activities` | `read_activities` | id ptr/len, out ptr, **out max len** | status code |
 
 ## Guest exports
 

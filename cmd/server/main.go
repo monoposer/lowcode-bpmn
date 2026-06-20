@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/monoposer/lowcode-bpmn/internal/api"
 	"github.com/monoposer/lowcode-bpmn/internal/engine"
-	"github.com/monoposer/lowcode-bpmn/internal/event"
 	"github.com/monoposer/lowcode-bpmn/internal/plugin"
 	"github.com/monoposer/lowcode-bpmn/internal/store"
 	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
+	"github.com/monoposer/lowcode-bpmn/pkg/env"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
 func main() {
@@ -35,7 +35,7 @@ func main() {
 		}
 	}()
 
-	addr := getEnv("HTTP_ADDR", ":8080")
+	addr := env.Get("HTTP_ADDR", ":8080")
 
 	storeCfg, err := store.LoadConfig()
 	if err != nil {
@@ -54,7 +54,7 @@ func main() {
 	}
 
 	eng := engine.NewEngine(st, nil)
-	if getEnvBool("ASYNC_EXECUTION", false) {
+	if env.Bool("ASYNC_EXECUTION", false) {
 		eng.SetAsync(true)
 		slog.Info("async execution enabled")
 	}
@@ -72,6 +72,7 @@ func main() {
 	startStreamConsumer(consumerCtx, pluginBoot.AssigneeConsumer, pluginBoot.AssigneeRuntime)
 	startStreamConsumer(consumerCtx, pluginBoot.TriggerConsumer, pluginBoot.TriggerRuntime)
 	startStreamConsumer(consumerCtx, pluginBoot.TaskConsumer, pluginBoot.TaskRuntime)
+	startStreamConsumer(consumerCtx, pluginBoot.ControlConsumer, pluginBoot.ControlRuntime)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
@@ -82,7 +83,8 @@ func main() {
 		Engine: eng,
 		Events: pluginBoot.Publisher(),
 	}
-	router := api.NewHTTPRouter(deps)
+	authCfg := api.LoadAuthConfigFromEnv()
+	router := api.NewHTTPRouter(deps, authCfg)
 	router = withEngineMiddleware(router, deps)
 	handler := withCORS(router)
 
@@ -151,25 +153,6 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func getEnv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func getEnvBool(key string, def bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return def
-	}
-	return b
 }
 
 func getEnvDuration(key string, def time.Duration) time.Duration {

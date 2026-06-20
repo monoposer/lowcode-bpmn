@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
 // Manifest describes a WASM plugin (plugin.json beside plugin.wasm).
@@ -24,6 +24,8 @@ func (m Manifest) EventStream() (event.Stream, error) {
 		return event.StreamTrigger, nil
 	case event.StreamTask:
 		return event.StreamTask, nil
+	case event.StreamControl:
+		return event.StreamControl, nil
 	default:
 		return "", fmt.Errorf("wasm manifest %q: invalid stream %q", m.Name, m.Stream)
 	}

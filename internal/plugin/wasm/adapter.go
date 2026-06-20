@@ -8,9 +8,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/monoposer/lowcode-bpmn/internal/engine"
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -45,6 +44,8 @@ func NewAdapter(ctx context.Context, wasmBytes []byte, manifest Manifest, host c
 			caps = AllTrigger
 		case event.StreamTask:
 			caps = AllTask
+		case event.StreamControl:
+			caps = AllControl
 		}
 	}
 	sources := make(map[string]struct{}, len(manifest.Sources))
@@ -178,11 +179,11 @@ func (a *Adapter) hostTriggerMessage(ctx context.Context, m api.Module, ptr, siz
 	if !a.Caps.Has(CapTriggerMessage) {
 		return 403
 	}
-	var req engine.TriggerMessageRequest
+	var req contract.TriggerMessageRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.TriggerMessage(ctx, req); err != nil {
+	if err := a.host.TriggerMessage(ctx, req); err != nil {
 		return 500
 	}
 	return 0
@@ -192,11 +193,11 @@ func (a *Adapter) hostStartProcess(ctx context.Context, m api.Module, ptr, size 
 	if !a.Caps.Has(CapStartProcess) {
 		return 403
 	}
-	var req engine.StartProcessRequest
+	var req contract.StartProcessRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.StartProcess(ctx, req); err != nil {
+	if err := a.host.StartProcess(ctx, req); err != nil {
 		return 500
 	}
 	return 0
@@ -206,11 +207,11 @@ func (a *Adapter) hostRemoveUser(ctx context.Context, m api.Module, ptr, size ui
 	if !a.Caps.Has(CapRemoveUser) {
 		return 403
 	}
-	var req engine.RemoveUserSyncRequest
+	var req contract.RemoveUserRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.RemoveUserFromActiveTasks(ctx, req); err != nil {
+	if err := a.host.RemoveUserFromActiveTasks(ctx, req); err != nil {
 		return 500
 	}
 	return 0
@@ -220,17 +221,17 @@ func (a *Adapter) hostReplaceAssignees(ctx context.Context, m api.Module, ptr, s
 	if !a.Caps.Has(CapReplaceAssignees) {
 		return 403
 	}
-	var req engine.ReplaceAssigneesSyncRequest
+	var req contract.ReplaceAssigneesRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.ReplaceTaskAssignees(ctx, req); err != nil {
+	if err := a.host.ReplaceTaskAssignees(ctx, req); err != nil {
 		return 500
 	}
 	return 0
 }
 
-func (a *Adapter) hostListTasks(ctx context.Context, m api.Module, tenantPtr, tenantLen, assigneePtr, assigneeLen, outPtr uint32) uint32 {
+func (a *Adapter) hostListTasks(ctx context.Context, m api.Module, tenantPtr, tenantLen, assigneePtr, assigneeLen, outPtr, outMaxLen uint32) uint32 {
 	if !a.Caps.Has(CapReadTasks) {
 		return 403
 	}
@@ -250,10 +251,7 @@ func (a *Adapter) hostListTasks(ctx context.Context, m api.Module, tenantPtr, te
 	if err != nil {
 		return 500
 	}
-	if !m.Memory().Write(outPtr, raw) {
-		return 500
-	}
-	return 0
+	return writeBounded(m, outPtr, outMaxLen, raw)
 }
 
 func readMem(m api.Module, ptr, size uint32) ([]byte, bool) {
@@ -264,7 +262,22 @@ func writeMem(m api.Module, ptr uint32, b []byte) bool {
 	return m.Memory().Write(ptr, b)
 }
 
-func (a *Adapter) hostGetInstance(ctx context.Context, m api.Module, idPtr, idLen, outPtr uint32) uint32 {
+const wasmStatusPayloadTooLarge uint32 = 413
+
+func writeBounded(m api.Module, ptr, maxLen uint32, b []byte) uint32 {
+	if maxLen == 0 {
+		return 400
+	}
+	if len(b) > int(maxLen) {
+		return wasmStatusPayloadTooLarge
+	}
+	if !writeMem(m, ptr, b) {
+		return 500
+	}
+	return 0
+}
+
+func (a *Adapter) hostGetInstance(ctx context.Context, m api.Module, idPtr, idLen, outPtr, outMaxLen uint32) uint32 {
 	if !a.Caps.Has(CapReadInstances) {
 		return 403
 	}
@@ -284,13 +297,10 @@ func (a *Adapter) hostGetInstance(ctx context.Context, m api.Module, idPtr, idLe
 	if err != nil {
 		return 500
 	}
-	if !writeMem(m, outPtr, raw) {
-		return 500
-	}
-	return 0
+	return writeBounded(m, outPtr, outMaxLen, raw)
 }
 
-func (a *Adapter) hostListActivities(ctx context.Context, m api.Module, idPtr, idLen, outPtr uint32) uint32 {
+func (a *Adapter) hostListActivities(ctx context.Context, m api.Module, idPtr, idLen, outPtr, outMaxLen uint32) uint32 {
 	if !a.Caps.Has(CapReadActivities) {
 		return 403
 	}
@@ -310,21 +320,18 @@ func (a *Adapter) hostListActivities(ctx context.Context, m api.Module, idPtr, i
 	if err != nil {
 		return 500
 	}
-	if !writeMem(m, outPtr, raw) {
-		return 500
-	}
-	return 0
+	return writeBounded(m, outPtr, outMaxLen, raw)
 }
 
 func (a *Adapter) hostCompleteTask(ctx context.Context, m api.Module, ptr, size uint32) uint32 {
 	if !a.Caps.Has(CapCompleteTask) {
 		return 403
 	}
-	var req engine.CompleteTaskRequest
+	var req contract.CompleteTaskRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.CompleteTask(ctx, req); err != nil {
+	if err := a.host.CompleteTask(ctx, req); err != nil {
 		return 500
 	}
 	return 0
@@ -334,11 +341,11 @@ func (a *Adapter) hostTerminate(ctx context.Context, m api.Module, ptr, size uin
 	if !a.Caps.Has(CapTerminate) {
 		return 403
 	}
-	var req engine.TerminateRequest
+	var req contract.TerminateRequest
 	if err := a.readJSON(ptr, size, &req); err != nil {
 		return 400
 	}
-	if _, err := a.host.Terminate(ctx, req); err != nil {
+	if err := a.host.Terminate(ctx, req); err != nil {
 		return 500
 	}
 	return 0

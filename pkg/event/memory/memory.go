@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
 // Consumer is an in-process queue for dev, tests, and HTTP webhook bridging.

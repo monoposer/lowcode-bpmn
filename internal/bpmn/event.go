@@ -1,6 +1,10 @@
 package bpmn
 
-import "fmt"
+import (
+	"fmt"
+
+	pkgvars "github.com/monoposer/lowcode-bpmn/pkg/vars"
+)
 
 // EventDefinitionType maps to BPMN 2.0 start event definitions (JSON form).
 // See schemas/process-definition.schema.json for the canonical protocol.
@@ -88,7 +92,7 @@ func BusinessKeyFromCorrelation(vars map[string]any, correlationKey string) stri
 	if correlationKey == "" {
 		return ""
 	}
-	v, ok := resolveVarPath(vars, correlationKey)
+	v, ok := pkgvars.ResolvePath(vars, correlationKey)
 	if !ok || v == nil {
 		return ""
 	}

@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
 	"github.com/monoposer/lowcode-bpmn/plugins/go/airtable"
 	"github.com/monoposer/lowcode-bpmn/plugins/go/canonical"
 	"github.com/monoposer/lowcode-bpmn/plugins/go/feishu"
@@ -55,6 +55,13 @@ func Resolve(stream event.Stream, name string, cfg Config) (contract.EventAdapte
 			return feishu.TaskAdapter{DefaultTenant: cfg.DefaultTenant}, true
 		case "wecom", "wework":
 			return wecom.TaskAdapter{DefaultTenant: cfg.DefaultTenant}, true
+		}
+	case event.StreamControl:
+		switch key {
+		case "generic":
+			return genericplugin.ControlAdapter{}, true
+		case "canonical":
+			return canonical.ControlAdapter{}, true
 		}
 	}
 	return nil, false

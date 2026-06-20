@@ -1,0 +1,4 @@
+{
+  "header": { "event_type": "contact.user.deleted_v3", "tenant_key": "t1" },
+  "event": { "object": { "user_id": "u1" } }
+}

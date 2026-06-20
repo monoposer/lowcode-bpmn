@@ -16,6 +16,27 @@ services:
       retries: 10
       start_period: 5s
 
+  redis:
+    profiles: ["redis", "ha"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  otel-collector:
+    profiles: ["otel"]
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4318:4318"
+
   app:
     build:
       context: ../..
@@ -36,10 +57,21 @@ services:
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-lowcode-bpmn}
       SERVICE_VERSION: ${SERVICE_VERSION:-dev}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      EVENT_CONSUMER: ${EVENT_CONSUMER:-memory}
+      EVENT_REDIS_URL: ${EVENT_REDIS_URL:-redis://redis:6379/0}
+      PLUGIN_ASSIGNEE_ADAPTERS: ${PLUGIN_ASSIGNEE_ADAPTERS:-generic,canonical,feishu,wecom}
+      PLUGIN_TRIGGER_ADAPTERS: ${PLUGIN_TRIGGER_ADAPTERS:-generic,canonical,feishu,wecom,airtable}
+      PLUGIN_TASK_ADAPTERS: ${PLUGIN_TASK_ADAPTERS:-generic,canonical,feishu,wecom}
+      PLUGIN_CONTROL_ADAPTERS: ${PLUGIN_CONTROL_ADAPTERS:-generic,canonical}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+      API_KEY: ${API_KEY:-}
     depends_on:
       postgres:
+        condition: service_healthy
+        required: false
+      redis:
         condition: service_healthy
         required: false
     volumes:

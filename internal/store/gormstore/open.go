@@ -58,6 +58,11 @@ func ParseDriver(raw string) (Driver, error) {
 // NewStore constructs a Store and applies schema migrations.
 func NewStore(ctx context.Context, db *gorm.DB) (*Store, error) {
 	s := &Store{db: db, dialect: db.Dialector.Name()}
+	if s.dialect == "postgres" {
+		if err := applyVersionedMigrations(db); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.autoMigrate(ctx); err != nil {
 		return nil, err
 	}

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/plugins/sdk"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/sdk"
 )
 
 func Source(evt event.InboundEvent) bool {

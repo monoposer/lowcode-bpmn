@@ -20,6 +20,7 @@ type Store interface {
 	UpdateProcessInstance(ctx context.Context, inst *ProcessInstance) error
 	GetProcessInstance(ctx context.Context, id uuid.UUID) (*ProcessInstance, error)
 	GetProcessInstanceForUpdate(ctx context.Context, id uuid.UUID) (*ProcessInstance, error)
+	FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, processKey, businessKey string) (*ProcessInstance, error)
 
 	CreateActivityInstance(ctx context.Context, act *ActivityInstance) error
 	UpdateActivityInstance(ctx context.Context, act *ActivityInstance) error

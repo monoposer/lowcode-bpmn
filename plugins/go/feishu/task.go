@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
-	"github.com/monoposer/lowcode-bpmn/plugins/sdk"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/sdk"
 )
 
 // TaskAdapter handles Feishu approval result → CompleteTask (approve/reject).

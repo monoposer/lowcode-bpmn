@@ -10,6 +10,7 @@ import (
 	"github.com/monoposer/lowcode-bpmn/internal/store/filestore"
 	"github.com/monoposer/lowcode-bpmn/internal/store/gormstore"
 	memstore "github.com/monoposer/lowcode-bpmn/internal/store/memory"
+	"github.com/monoposer/lowcode-bpmn/pkg/env"
 )
 
 // Backend identifies a persistence implementation.
@@ -31,18 +32,18 @@ type Config struct {
 
 // LoadConfig reads store settings from environment variables.
 func LoadConfig() (Config, error) {
-	backend, err := ParseBackend(getEnv("STORE_BACKEND", "db"))
+	backend, err := ParseBackend(env.Get("STORE_BACKEND", "db"))
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
 		Backend:     backend,
-		FilePath:    getEnv("STORE_PATH", "./data"),
+		FilePath:    env.Get("STORE_PATH", "./data"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 	}
 
-	driver, err := gormstore.ParseDriver(getEnv("DB_DRIVER", "postgres"))
+	driver, err := gormstore.ParseDriver(env.Get("DB_DRIVER", "postgres"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -105,11 +106,4 @@ func Describe(cfg Config) string {
 	default:
 		return fmt.Sprintf("db(%s)", cfg.DBDriver)
 	}
-}
-
-func getEnv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

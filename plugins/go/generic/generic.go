@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
-	"github.com/monoposer/lowcode-bpmn/plugins/sdk"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/sdk"
 )
 
 type AssigneeAdapter struct{}
@@ -87,8 +87,27 @@ func (TaskAdapter) Handle(ctx context.Context, evt event.InboundEvent, host cont
 	if action.TenantID == "" {
 		action.TenantID = sdk.TenantOrDefault(evt.TenantID, "demo")
 	}
-	if err := sdk.ApplyTaskAction(ctx, host, action); err != nil {
+	return sdk.ApplyTaskAction(ctx, host, action)
+}
+
+type ControlAdapter struct{}
+
+func (ControlAdapter) Name() string         { return "generic" }
+func (ControlAdapter) Stream() event.Stream { return event.StreamControl }
+func (ControlAdapter) Supports(evt event.InboundEvent) bool {
+	return evt.Source == "" || evt.Source == "generic" || evt.Source == "webhook"
+}
+
+func (ControlAdapter) Handle(ctx context.Context, evt event.InboundEvent, host contract.Host) error {
+	var action sdk.Action
+	if err := json.Unmarshal(evt.Payload, &action); err != nil {
 		return err
+	}
+	if action.Kind == "" {
+		action.Kind = "terminate"
+	}
+	if action.TenantID == "" {
+		action.TenantID = sdk.TenantOrDefault(evt.TenantID, "demo")
 	}
 	return sdk.ApplyControlAction(ctx, host, action)
 }

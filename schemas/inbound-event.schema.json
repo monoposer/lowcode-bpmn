@@ -9,8 +9,8 @@
     "id": { "type": "string" },
     "stream": {
       "type": "string",
-      "enum": ["assignee", "trigger", "task"],
-      "description": "assignee = personnel sync; trigger = process start; task = approve/reject"
+      "enum": ["assignee", "trigger", "task", "control"],
+      "description": "assignee = personnel sync; trigger = process start; task = approve/reject; control = terminate"
     },
     "source": {
       "type": "string",

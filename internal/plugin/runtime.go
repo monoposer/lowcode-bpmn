@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
 )
 
 // EventAdapter translates an external event format into Host API calls.

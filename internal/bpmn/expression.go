@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	pkgvars "github.com/monoposer/lowcode-bpmn/pkg/vars"
 )
 
 // EvalCondition evaluates a BPMN condition against process variables.
@@ -30,7 +32,7 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
 			right = strings.Trim(right, "\"'")
-			v, ok := resolveVarPath(vars, left)
+			v, ok := pkgvars.ResolvePath(vars, left)
 			if !ok {
 				if op == "!=" {
 					return true, nil
@@ -49,7 +51,7 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 	}
 
 	// Bare field name — truthy.
-	v, ok := resolveVarPath(vars, expr)
+	v, ok := pkgvars.ResolvePath(vars, expr)
 	if !ok {
 		return false, nil
 	}
@@ -65,31 +67,6 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 	default:
 		return v != nil, nil
 	}
-}
-
-// resolveVarPath walks dot-separated segments through nested map variables.
-func resolveVarPath(vars map[string]any, path string) (any, bool) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, false
-	}
-
-	cur := any(vars)
-	for _, seg := range strings.Split(path, ".") {
-		if seg == "" {
-			return nil, false
-		}
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		v, ok := m[seg]
-		if !ok {
-			return nil, false
-		}
-		cur = v
-	}
-	return cur, true
 }
 
 func compareNumericOp(left any, right string, op string) (bool, error) {

@@ -165,6 +165,10 @@ func (s *Store) GetProcessInstanceForUpdate(ctx context.Context, id uuid.UUID) (
 	return s.mem.GetProcessInstanceForUpdate(ctx, id)
 }
 
+func (s *Store) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, processKey, businessKey string) (*engine.ProcessInstance, error) {
+	return s.mem.FindRunningInstanceByBusinessKey(ctx, tenantID, processKey, businessKey)
+}
+
 func (s *Store) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,6 +288,10 @@ func (t *txStore) GetProcessInstance(ctx context.Context, id uuid.UUID) (*engine
 
 func (t *txStore) GetProcessInstanceForUpdate(ctx context.Context, id uuid.UUID) (*engine.ProcessInstance, error) {
 	return t.mem.GetProcessInstanceForUpdate(ctx, id)
+}
+
+func (t *txStore) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, processKey, businessKey string) (*engine.ProcessInstance, error) {
+	return t.mem.FindRunningInstanceByBusinessKey(ctx, tenantID, processKey, businessKey)
 }
 
 func (t *txStore) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {

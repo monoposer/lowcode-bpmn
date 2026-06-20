@@ -8,8 +8,8 @@ import (
 
 	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
 	"github.com/monoposer/lowcode-bpmn/internal/engine"
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	memconsumer "github.com/monoposer/lowcode-bpmn/internal/event/memory"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	memconsumer "github.com/monoposer/lowcode-bpmn/pkg/event/memory"
 	"github.com/monoposer/lowcode-bpmn/internal/plugin"
 	"github.com/monoposer/lowcode-bpmn/plugins/go/airtable"
 	"github.com/monoposer/lowcode-bpmn/plugins/go/feishu"
@@ -102,11 +102,12 @@ func TestTriggerStreamConsumer(t *testing.T) {
 	<-done
 }
 
-func TestTripleStreamRouter(t *testing.T) {
+func TestQuadStreamRouter(t *testing.T) {
 	assignee := memconsumer.New(event.StreamAssignee, 4)
 	trigger := memconsumer.New(event.StreamTrigger, 4)
 	task := memconsumer.New(event.StreamTask, 4)
-	router := event.NewRouterPublisher(assignee, trigger, task)
+	control := memconsumer.New(event.StreamControl, 4)
+	router := event.NewRouterPublisher(assignee, trigger, task, control)
 	ctx := context.Background()
 	if err := router.Publish(ctx, event.StreamAssignee, event.InboundEvent{Source: "feishu", Payload: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
@@ -115,6 +116,9 @@ func TestTripleStreamRouter(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := router.Publish(ctx, event.StreamTask, event.InboundEvent{Source: "feishu", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Publish(ctx, event.StreamControl, event.InboundEvent{Source: "generic", Payload: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 }

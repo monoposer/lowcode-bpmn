@@ -3,10 +3,10 @@ package contract
 import (
 	"context"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
-// EventAdapter translates an external event format into Host API calls.
+// EventAdapter maps vendor payloads to Host SDK calls.
 type EventAdapter interface {
 	Name() string
 	Stream() event.Stream

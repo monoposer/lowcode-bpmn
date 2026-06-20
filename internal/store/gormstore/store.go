@@ -196,6 +196,25 @@ func (s *Store) loadProcessInstance(ctx context.Context, id uuid.UUID, forUpdate
 	return instanceFromModel(&row)
 }
 
+func (s *Store) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, processKey, businessKey string) (*engine.ProcessInstance, error) {
+	if businessKey == "" {
+		return nil, nil
+	}
+	var row BpmnInstance
+	err := s.conn(ctx).
+		Where("tenant_id = ? AND process_key = ? AND business_key = ? AND status = ?",
+			tenantID, processKey, businessKey, engine.ProcessStatusRunning).
+		Order("started_at DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return instanceFromModel(&row)
+}
+
 func (s *Store) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {
 	if act.ID == uuid.Nil {
 		act.ID = newUUID()

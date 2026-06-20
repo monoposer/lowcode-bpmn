@@ -44,6 +44,10 @@ Demo UI (separate path): `../examples/bpmn/client` — Vite + React playground; 
 | `WORKER_INTERVAL` | `500ms` | Job poll interval |
 | `LOG_LEVEL`, `LOG_FORMAT` | — | Structured logging |
 | `OTEL_*` | — | Optional OpenTelemetry |
+| `API_KEY` / `API_KEYS` | — | API auth (`tenant:key` CSV); `/api/*` protected when set |
+| `AUTH_REQUIRED` | `false` | Require keys even if list empty |
+| `EVENT_CONSUMER` | `memory` | `redis` for HA multi-replica |
+| `PLUGIN_*_ADAPTERS` | — | See [docs/plugins.md](./docs/plugins.md) |
 
 Docker file store: image entrypoint `chown`s `STORE_PATH` before dropping to `appuser`.
 
@@ -87,6 +91,8 @@ Each deploy creates a **new version**. Instances pin `definition_snapshot` at st
 | POST | `/api/v1/triggers/message` | Message start (direct) |
 | POST | `/api/v1/events/assignee/{source}` | Assignee stream plugin ingress |
 | POST | `/api/v1/events/trigger/{source}` | Trigger stream plugin ingress |
+| POST | `/api/v1/events/task/{source}` | Task stream plugin ingress |
+| POST | `/api/v1/events/control/{source}` | Control stream (terminate) |
 | GET | `/api/v1/process-instances/{id}` | Instance + variables + `lock_version` |
 | GET | `/api/v1/process-instances/{id}/activities` | Activity trail |
 | POST | `/api/v1/process-instances/{id}/tasks/{activityId}/complete` | Complete userTask |
@@ -116,15 +122,14 @@ docker compose up -d --build
 2. **Tests** — Add/update tests in `internal/bpmn`, `internal/engine`, or store packages; use `memory` store for engine tests.
 3. **Transactions** — Multi-step writes go through `Store.WithTx`.
 4. **API** — Keep JSON-first; wire new routes in `internal/api/http.go` with consistent error codes.
-5. **Do not** add auth middleware unless explicitly requested.
-6. **Do not** add auth middleware unless explicitly requested.
+5. **Do not** add auth middleware unless explicitly requested — use `API_KEY` / `AUTH_REQUIRED` env instead when enabling auth.
 
 ## Known gaps (do not assume implemented)
 
-- Authentication / authorization
+- Authentication / authorization (optional API keys — set `API_KEY` or `AUTH_REQUIRED`)
 - Boundary events, BPMN XML
 - Multi-instance loops
-- Idempotent start by `businessKey`
+- Idempotent start by `businessKey` (message trigger — running instance dedupe)
 - Webhooks / SSE for task events (inbound message trigger: `POST /api/v1/triggers/message`)
 
 ## When editing related projects

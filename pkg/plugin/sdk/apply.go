@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/monoposer/lowcode-bpmn/internal/engine"
-	"github.com/monoposer/lowcode-bpmn/internal/plugin/contract"
+	"github.com/monoposer/lowcode-bpmn/pkg/plugin/contract"
 )
 
 func ApplyAssigneeAction(ctx context.Context, host contract.Host, action Action) error {
@@ -14,13 +13,12 @@ func ApplyAssigneeAction(ctx context.Context, host contract.Host, action Action)
 		if action.UserID == "" {
 			return nil
 		}
-		_, err := host.RemoveUserFromActiveTasks(ctx, engine.RemoveUserSyncRequest{
+		return host.RemoveUserFromActiveTasks(ctx, contract.RemoveUserRequest{
 			TenantID: action.TenantID,
 			UserID:   action.UserID,
 			Reason:   action.Reason,
 			Operator: action.Operator,
 		})
-		return err
 	case "replace_assignees":
 		instID, err := action.InstanceID()
 		if err != nil {
@@ -30,7 +28,7 @@ func ApplyAssigneeAction(ctx context.Context, host contract.Host, action Action)
 		if err != nil {
 			return fmt.Errorf("replace_assignees: invalid activity_id")
 		}
-		_, err = host.ReplaceTaskAssignees(ctx, engine.ReplaceAssigneesSyncRequest{
+		return host.ReplaceTaskAssignees(ctx, contract.ReplaceAssigneesRequest{
 			TenantID:          action.TenantID,
 			ProcessInstanceID: instID,
 			ActivityID:        actID,
@@ -38,7 +36,6 @@ func ApplyAssigneeAction(ctx context.Context, host contract.Host, action Action)
 			Operator:          action.Operator,
 			Reason:            action.Reason,
 		})
-		return err
 	default:
 		return nil
 	}
@@ -50,24 +47,22 @@ func ApplyTriggerAction(ctx context.Context, host contract.Host, action Action) 
 		if action.MessageRef == "" {
 			return nil
 		}
-		_, err := host.TriggerMessage(ctx, engine.TriggerMessageRequest{
+		return host.TriggerMessage(ctx, contract.TriggerMessageRequest{
 			TenantID:    action.TenantID,
 			MessageRef:  action.MessageRef,
 			BusinessKey: action.BusinessKey,
 			Variables:   action.Variables,
 		})
-		return err
 	case "start_process":
 		if action.ProcessKey == "" {
 			return nil
 		}
-		_, err := host.StartProcess(ctx, engine.StartProcessRequest{
+		return host.StartProcess(ctx, contract.StartProcessRequest{
 			TenantID:    action.TenantID,
 			ProcessKey:  action.ProcessKey,
 			BusinessKey: action.BusinessKey,
 			Variables:   action.Variables,
 		})
-		return err
 	default:
 		return nil
 	}
@@ -87,7 +82,7 @@ func ApplyTaskAction(ctx context.Context, host contract.Host, action Action) err
 		if action.Action == "" {
 			action.Action = "approve"
 		}
-		_, err = host.CompleteTask(ctx, engine.CompleteTaskRequest{
+		return host.CompleteTask(ctx, contract.CompleteTaskRequest{
 			ProcessInstanceID: instID,
 			ActivityID:        actID,
 			Assignee:          action.Assignee,
@@ -96,7 +91,6 @@ func ApplyTaskAction(ctx context.Context, host contract.Host, action Action) err
 			Variables:         action.Variables,
 			LockVersion:       action.LockVersion,
 		})
-		return err
 	default:
 		return nil
 	}
@@ -109,14 +103,13 @@ func ApplyControlAction(ctx context.Context, host contract.Host, action Action) 
 		if err != nil {
 			return fmt.Errorf("terminate: invalid process_instance_id")
 		}
-		_, err = host.Terminate(ctx, engine.TerminateRequest{
+		return host.Terminate(ctx, contract.TerminateRequest{
 			ProcessInstanceID: instID,
 			ScopeID:           action.ScopeID,
 			Reason:            action.Reason,
 			Operator:          action.Operator,
 			LockVersion:       action.LockVersion,
 		})
-		return err
 	default:
 		return nil
 	}
@@ -134,14 +127,13 @@ func CompleteTaskByBusinessKey(ctx context.Context, host contract.Host, tenant, 
 		if t.BusinessKey != businessKey {
 			continue
 		}
-		_, err = host.CompleteTask(ctx, engine.CompleteTaskRequest{
+		return host.CompleteTask(ctx, contract.CompleteTaskRequest{
 			ProcessInstanceID: t.ProcessInstanceID,
 			ActivityID:        t.ID,
 			Assignee:          assignee,
 			Action:            approvalAction,
 			Comment:           comment,
 		})
-		return err
 	}
 	return nil
 }

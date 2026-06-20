@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
 type inboundEventRequest struct {

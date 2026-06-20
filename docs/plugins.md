@@ -1,23 +1,25 @@
 # Plugin system (Paca-style)
 
-Triple event streams + WASM sandbox with capability permissions.
+Quad event streams + WASM sandbox with capability permissions.
 
 ```
-                    ┌─ assignee Consumer ─► AssigneeRuntime ─► feishu/wecom (HR)
-Redis / HTTP / Kafka ┼─ trigger Consumer  ─► TriggerRuntime  ─► airtable/feishu (start)
-                    └─ task Consumer     ─► TaskRuntime     ─► feishu/wecom (approve/reject)
+                    ┌─ assignee Consumer ─► HR sync
+Redis / HTTP / Kafka ┼─ trigger Consumer  ─► process start
+                    ┼─ task Consumer     ─► approve / reject
+                    └─ control Consumer  ─► terminate
                               │
                               ▼
                          Host SDK ─► Engine
 ```
 
-## Three consumers
+## Four consumers
 
 | Stream | Adapters (default) | Host calls |
 |--------|-------------------|------------|
 | **assignee** | feishu, wecom, generic, canonical | `RemoveUserFromActiveTasks`, `ReplaceTaskAssignees` |
 | **trigger** | feishu, wecom, airtable, generic, canonical | `TriggerMessage`, `StartProcess` |
-| **task** | feishu, wecom, generic, canonical | `CompleteTask`, `Terminate` |
+| **task** | feishu, wecom, generic, canonical | `CompleteTask` |
+| **control** | generic, canonical | `Terminate` |
 
 Configure separately:
 
@@ -25,13 +27,12 @@ Configure separately:
 PLUGIN_ASSIGNEE_ADAPTERS=generic,feishu,wecom
 PLUGIN_TRIGGER_ADAPTERS=generic,feishu,wecom,airtable
 PLUGIN_TASK_ADAPTERS=generic,feishu,wecom
+PLUGIN_CONTROL_ADAPTERS=generic,canonical
 ```
 
-Feishu approval events (`approval.instance.status_changed_v1`) route to **task**, not trigger.
+Feishu approval events route to **task**, not trigger. Terminate routes to **control**.
 
 ## Canonical actions
-
-Adapters normalize inbound payloads to `CanonicalAction` before calling Host:
 
 | `kind` | Stream | Host method |
 |--------|--------|-------------|
@@ -40,27 +41,11 @@ Adapters normalize inbound payloads to `CanonicalAction` before calling Host:
 | `trigger_message` | trigger | `TriggerMessage` |
 | `start_process` | trigger | `StartProcess` |
 | `complete_task` | task | `CompleteTask` |
-| `terminate` | task | `Terminate` |
+| `terminate` | control | `Terminate` |
 
 Schema: `schemas/adapter-action.schema.json`.
 
 ## WASM plugins (capability sandbox)
-
-Like Paca: plugins declare **capabilities** in `plugin.json`; only permitted `bpmn_host` imports are registered.
-
-```json
-{
-  "name": "my-adapter",
-  "stream": "task",
-  "sources": ["feishu"],
-  "capabilities": ["complete_task", "read_tasks"],
-  "wasm": "plugin.wasm"
-}
-```
-
-```bash
-PLUGIN_WASM_DIR=./plugins/wasm
-```
 
 See [plugins/wasm/example-echo/README.md](../plugins/wasm/example-echo/README.md).
 
@@ -74,11 +59,11 @@ See [plugins/wasm/example-echo/README.md](../plugins/wasm/example-echo/README.md
 | `replace_assignees` | `bpmn_host.replace_assignees` |
 | `complete_task` | `bpmn_host.complete_task` |
 | `terminate` | `bpmn_host.terminate` |
-| `read_tasks` | `bpmn_host.list_tasks` |
-| `read_instances` | `bpmn_host.get_process_instance` |
-| `read_activities` | `bpmn_host.list_activities` |
+| `read_tasks` | `bpmn_host.list_tasks` (+ `outMaxLen`) |
+| `read_instances` | `bpmn_host.get_process_instance` (+ `outMaxLen`) |
+| `read_activities` | `bpmn_host.list_activities` (+ `outMaxLen`) |
 
-Undeclared capabilities → host import not exposed → guest cannot call.
+| `413` | WASM host write exceeded guest buffer (`outMaxLen`) |
 
 ## Event transport
 
@@ -86,20 +71,25 @@ Undeclared capabilities → host import not exposed → guest cannot call.
 |-----|---------|
 | `EVENT_CONSUMER` | `memory` |
 | `EVENT_REDIS_URL` | (required when `redis`) |
-| `EVENT_REDIS_ASSIGNEE_KEY` | `bpmn:events:assignee` |
-| `EVENT_REDIS_TRIGGER_KEY` | `bpmn:events:trigger` |
-| `EVENT_REDIS_TASK_KEY` | `bpmn:events:task` |
+| `EVENT_REDIS_*_KEY` | `bpmn:events:{stream}` |
+
+Production HA: `docker compose --profile db --profile redis up -d` with `EVENT_CONSUMER=redis`.
 
 ## HTTP ingress
 
 ```http
-POST /api/v1/events/assignee/feishu   # HR / org change
-POST /api/v1/events/trigger/airtable  # process start
-POST /api/v1/events/task/feishu       # approve / reject
+POST /api/v1/events/assignee/feishu
+POST /api/v1/events/trigger/airtable
+POST /api/v1/events/task/feishu
+POST /api/v1/events/control/generic
 ```
+
+Protected by `API_KEY` / `API_KEYS` when configured (`AUTH_REQUIRED=true` recommended).
 
 ## Go plugins
 
-Implement `contract.EventAdapter` under `plugins/go/<name>/`, register in `plugins/registry/registry.go`.
+Native adapters: `plugins/go/*` (feishu/wecom/airtable are separate Go modules — see `go.work`).
 
-Shared SDK: `plugins/sdk/` (Action schema, Apply* helpers). WASM: `plugins/wasm/*/plugin.json`.
+Register new adapters in `plugins/registry/registry.go`.
+
+Contract tests: `go test ./plugins/go/feishu/ ./plugins/go/airtable/`

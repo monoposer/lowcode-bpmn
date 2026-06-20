@@ -63,6 +63,22 @@ func TestTriggerMessageStartsMatchingProcess(t *testing.T) {
 	if result.Matches[0].InstanceID == "" {
 		t.Fatal("expected instance id")
 	}
+	firstID := result.Matches[0].InstanceID
+
+	dup, err := eng.TriggerMessage(ctx, engine.TriggerMessageRequest{
+		TenantID:   "t",
+		MessageRef: "airtable.orders.updated",
+		Variables:  vars,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dup.Matches) != 1 || !dup.Matches[0].Skipped {
+		t.Fatalf("expected idempotent skip, got %+v", dup.Matches)
+	}
+	if dup.Matches[0].InstanceID != firstID {
+		t.Fatalf("expected same instance %s, got %s", firstID, dup.Matches[0].InstanceID)
+	}
 
 	result2, err := eng.TriggerMessage(ctx, engine.TriggerMessageRequest{
 		TenantID:   "t",

@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 )
 
 // Consumer reads events from a Redis list (LPUSH / BRPOP).

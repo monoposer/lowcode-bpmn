@@ -6,26 +6,29 @@ import (
 	"os"
 	"strings"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
-	memconsumer "github.com/monoposer/lowcode-bpmn/internal/event/memory"
-	redisconsumer "github.com/monoposer/lowcode-bpmn/internal/event/redis"
+	"github.com/monoposer/lowcode-bpmn/pkg/env"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
+	memconsumer "github.com/monoposer/lowcode-bpmn/pkg/event/memory"
+	redisconsumer "github.com/monoposer/lowcode-bpmn/pkg/event/redis"
 )
 
-// Config configures triple-stream consumers.
+// Config configures quad-stream consumers.
 type Config struct {
-	Kind             string
-	RedisURL         string
-	RedisAssigneeKey string
-	RedisTriggerKey  string
-	RedisTaskKey     string
-	BufferSize       int
+	Kind              string
+	RedisURL          string
+	RedisAssigneeKey  string
+	RedisTriggerKey   string
+	RedisTaskKey      string
+	RedisControlKey   string
+	BufferSize        int
 }
 
-// Streams holds assignee, trigger, and task consumers.
+// Streams holds assignee, trigger, task, and control consumers.
 type Streams struct {
 	Assignee event.Consumer
 	Trigger  event.Consumer
 	Task     event.Consumer
+	Control  event.Consumer
 }
 
 // NewStreams creates all stream consumers.
@@ -43,6 +46,7 @@ func NewStreams(cfg Config) (*Streams, error) {
 			Assignee: memconsumer.New(event.StreamAssignee, buf),
 			Trigger:  memconsumer.New(event.StreamTrigger, buf),
 			Task:     memconsumer.New(event.StreamTask, buf),
+			Control:  memconsumer.New(event.StreamControl, buf),
 		}, nil
 	case "redis":
 		if cfg.RedisURL == "" {
@@ -60,6 +64,10 @@ func NewStreams(cfg Config) (*Streams, error) {
 		if taskKey == "" {
 			taskKey = "bpmn:events:task"
 		}
+		controlKey := cfg.RedisControlKey
+		if controlKey == "" {
+			controlKey = "bpmn:events:control"
+		}
 		a, err := redisconsumer.New(cfg.RedisURL, event.StreamAssignee, assigneeKey)
 		if err != nil {
 			return nil, err
@@ -75,7 +83,14 @@ func NewStreams(cfg Config) (*Streams, error) {
 			_ = t.Close()
 			return nil, err
 		}
-		return &Streams{Assignee: a, Trigger: t, Task: k}, nil
+		c, err := redisconsumer.New(cfg.RedisURL, event.StreamControl, controlKey)
+		if err != nil {
+			_ = a.Close()
+			_ = t.Close()
+			_ = k.Close()
+			return nil, err
+		}
+		return &Streams{Assignee: a, Trigger: t, Task: k, Control: c}, nil
 	default:
 		return nil, fmt.Errorf("unsupported EVENT_CONSUMER %q", cfg.Kind)
 	}
@@ -91,20 +106,14 @@ func LoadConfigFromEnv() Config {
 		}
 	}
 	return Config{
-		Kind:             getenv("EVENT_CONSUMER", "memory"),
+		Kind:             env.Get("EVENT_CONSUMER", "memory"),
 		RedisURL:         os.Getenv("EVENT_REDIS_URL"),
 		RedisAssigneeKey: os.Getenv("EVENT_REDIS_ASSIGNEE_KEY"),
 		RedisTriggerKey:  os.Getenv("EVENT_REDIS_TRIGGER_KEY"),
 		RedisTaskKey:     os.Getenv("EVENT_REDIS_TASK_KEY"),
+		RedisControlKey:  os.Getenv("EVENT_REDIS_CONTROL_KEY"),
 		BufferSize:       buf,
 	}
-}
-
-func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 // Close shuts down all consumers.
@@ -120,5 +129,8 @@ func (s *Streams) Close(context.Context) {
 	}
 	if s.Task != nil {
 		_ = s.Task.Close()
+	}
+	if s.Control != nil {
+		_ = s.Control.Close()
 	}
 }

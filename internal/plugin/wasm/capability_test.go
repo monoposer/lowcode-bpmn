@@ -3,7 +3,7 @@ package wasm_test
 import (
 	"testing"
 
-	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/pkg/event"
 	"github.com/monoposer/lowcode-bpmn/internal/plugin/wasm"
 )
 
