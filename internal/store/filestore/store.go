@@ -61,6 +61,9 @@ func (s *Store) load() error {
 		return fmt.Errorf("decode store file: %w", err)
 	}
 	s.mem.Restore(snap)
+	if err := s.loadProcessDefinitionsFromXML(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -115,6 +118,9 @@ func (s *Store) InsertProcessVersion(ctx context.Context, p *engine.DeployedProc
 	if err := s.mem.InsertProcessVersion(ctx, p); err != nil {
 		return err
 	}
+	if err := s.writeProcessXML(p); err != nil {
+		return err
+	}
 	return s.persistLocked()
 }
 
@@ -122,6 +128,9 @@ func (s *Store) DeleteProcess(ctx context.Context, tenantID, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.mem.DeleteProcess(ctx, tenantID, key); err != nil {
+		return err
+	}
+	if err := s.deleteProcessXML(tenantID, key); err != nil {
 		return err
 	}
 	return s.persistLocked()

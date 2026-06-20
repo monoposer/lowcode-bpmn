@@ -68,6 +68,33 @@ func ValidateStartEventEventDefinition(el Element) error {
 	return nil
 }
 
+// SignalStartMatch reports whether a startEvent should fire for signalRef and payload.
+func SignalStartMatch(el Element, signalRef string, vars map[string]any) (bool, error) {
+	if el.Kind != KindStartEvent || el.EventDefinition == nil {
+		return false, nil
+	}
+	ed := el.EventDefinition
+	if ed.EffectiveEventType() != EventTypeSignal {
+		return false, nil
+	}
+	if ed.SignalRef != signalRef {
+		return false, nil
+	}
+	return EvalCondition(ed.Condition, vars)
+}
+
+// ConditionalStartMatch reports whether a conditional startEvent should fire.
+func ConditionalStartMatch(el Element, vars map[string]any) (bool, error) {
+	if el.Kind != KindStartEvent || el.EventDefinition == nil {
+		return false, nil
+	}
+	ed := el.EventDefinition
+	if ed.EffectiveEventType() != EventTypeConditional {
+		return false, nil
+	}
+	return EvalCondition(ed.Condition, vars)
+}
+
 // MessageStartMatch reports whether a startEvent should fire for the given messageRef and payload.
 func MessageStartMatch(el Element, messageRef string, vars map[string]any) (bool, error) {
 	if el.Kind != KindStartEvent || el.EventDefinition == nil {

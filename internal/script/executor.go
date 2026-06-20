@@ -3,69 +3,50 @@ package script
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
-// Executor runs ScriptTask scripts with set/log stubs and delegates JS to goja.
+// Executor runs ScriptTask scripts (javascript or log only).
 type Executor struct {
-	js Runner
+	js *JSExecutor
 }
 
-// NewExecutor returns the default script executor (JS via goja).
+// NewExecutor returns the default script executor (JS via goja + log mode).
 func NewExecutor() *Executor {
-	js := NewJSExecutor()
-	return &Executor{js: js}
+	return &Executor{js: NewJSExecutor(nil)}
 }
 
-func (e *Executor) Run(ctx context.Context, scriptBody, lang string, vars map[string]any) (map[string]any, error) {
-	if scriptBody == "" {
+func (e *Executor) Run(ctx context.Context, req RunRequest) (map[string]any, error) {
+	if req.Script == "" {
 		return nil, fmt.Errorf("script is empty")
 	}
 
-	if len(scriptBody) > 4 && scriptBody[:4] == "set:" {
-		return e.runSet(scriptBody, vars)
-	}
-
-	lang = normalizeLang(lang)
-	switch lang {
+	switch normalizeLang(req.Lang) {
 	case "javascript", "js":
-		if e.js != nil {
-			return e.js.Run(ctx, scriptBody, lang, vars)
+		if e.js == nil {
+			return nil, fmt.Errorf("javascript runtime not configured")
 		}
-		return nil, fmt.Errorf("javascript runtime not configured")
-	case "log", "noop", "":
-		log.Printf("[script] %s vars=%d", scriptBody, len(vars))
-		return map[string]any{"executed": true, "script": scriptBody}, nil
-	case "set":
-		return e.runSet(scriptBody, vars)
+		return e.js.Run(ctx, req)
+	case "log":
+		attrs := append(slogAttrs(req),
+			slog.String("script", req.Script),
+			slog.Int("vars", len(req.Variables)),
+		)
+		slog.InfoContext(ctx, "scriptTask log", attrs...)
+		return map[string]any{}, nil
 	default:
-		log.Printf("[script] unsupported lang=%q, running as log stub", lang)
-		return map[string]any{"executed": true}, nil
+		attrs := append(slogAttrs(req), slog.String("scriptLang", req.Lang))
+		slog.WarnContext(ctx, "unsupported scriptLang", attrs...)
+		return nil, fmt.Errorf("unsupported scriptLang %q (use js or log)", req.Lang)
 	}
-}
-
-func (e *Executor) runSet(script string, vars map[string]any) (map[string]any, error) {
-	rest := script[4:]
-	for i, c := range rest {
-		if c == '=' {
-			key := rest[:i]
-			val := rest[i+1:]
-			if vars == nil {
-				vars = make(map[string]any)
-			}
-			vars[key] = val
-			return map[string]any{key: val}, nil
-		}
-	}
-	return nil, fmt.Errorf("invalid set script: %s", script)
 }
 
 func normalizeLang(lang string) string {
 	switch lang {
-	case "javascript", "js":
+	case "", "javascript", "js":
 		return "javascript"
-	case "groovy":
-		return "groovy"
+	case "log":
+		return "log"
 	default:
 		return lang
 	}

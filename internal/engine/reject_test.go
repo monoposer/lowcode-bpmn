@@ -48,7 +48,7 @@ func TestRejectReturnParallelBranch(t *testing.T) {
 			{ID: "review-a", Kind: bpmn.KindUserTask, Name: "Review A", ScopeID: "sub1", Assignees: []string{"leader-a"}, ReturnTo: "submit"},
 			{ID: "review-b", Kind: bpmn.KindUserTask, Name: "Review B", ScopeID: "sub1", Assignees: []string{"leader-b"}},
 			{ID: "join", Kind: bpmn.KindParallelGateway, ScopeID: "sub1"},
-			{ID: "notify", Kind: bpmn.KindScriptTask, ScopeID: "sub1", Script: "set:done=true"},
+			{ID: "notify", Kind: bpmn.KindScriptTask, ScopeID: "sub1", ScriptLang: "javascript", Script: `return { done: true }`},
 			{ID: "end", Kind: bpmn.KindEndEvent},
 		},
 		Flows: []bpmn.SequenceFlow{

@@ -38,6 +38,7 @@ func NewHTTPRouter(deps RouterDeps, auth AuthConfig) http.Handler {
 
 	r.Route("/api/v1/tenants/{tenantId}/processes", func(r chi.Router) {
 		r.Put("/{key}", handleDeployProcess(deps))
+		r.Get("/{key}", handleGetProcessDefinition(deps))
 		r.Get("/", handleListProcesses(deps))
 		r.Delete("/{key}", handleDeleteProcess(deps))
 	})
@@ -55,6 +56,8 @@ func NewHTTPRouter(deps RouterDeps, auth AuthConfig) http.Handler {
 
 	r.Route("/api/v1/triggers", func(r chi.Router) {
 		r.Post("/message", handleTriggerMessage(deps))
+		r.Post("/signal", handleTriggerSignal(deps))
+		r.Post("/conditional", handleTriggerConditional(deps))
 	})
 
 	r.Post("/api/v1/events/assignee/{source}", handleStreamInboundEvent(deps.Events, event.StreamAssignee))

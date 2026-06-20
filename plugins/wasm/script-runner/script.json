@@ -1,0 +1,5 @@
+{
+  "name": "script-runner",
+  "capabilities": ["log", "http_fetch"],
+  "wasm": "script.wasm"
+}

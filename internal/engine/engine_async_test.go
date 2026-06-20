@@ -92,7 +92,7 @@ func TestProcessVersionPinning(t *testing.T) {
 
 	v2 := approvalProcess()
 	v2.Elements = append(v2.Elements, bpmn.Element{
-		ID: "extra", Kind: bpmn.KindScriptTask, Script: "set:extra=1",
+		ID: "extra", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { extra: 1 }`,
 	})
 	_ = store.InsertProcessVersion(ctx, &engine.DeployedProcess{
 		TenantID: "t", Key: "p", Version: 2, Definition: v2,

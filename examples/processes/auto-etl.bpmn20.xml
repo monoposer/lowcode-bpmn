@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:lc="https://github.com/monoposer/lowcode-bpmn/extensions"
+             targetNamespace="http://bpmn.io/schema/bpmn">
+  <process id="auto-etl" name="Automated ETL" isExecutable="true">
+    <startEvent id="start" name="Start"/>
+    <serviceTask id="fetch" name="Fetch data">
+      <extensionElements>
+        <lc:taskType>data-sync</lc:taskType>
+        <lc:implementation>http</lc:implementation>
+        <lc:serviceUrl>https://httpbin.org/get</lc:serviceUrl>
+        <lc:serviceMethod>GET</lc:serviceMethod>
+      </extensionElements>
+    </serviceTask>
+    <scriptTask id="transform" name="Transform">
+      <script scriptFormat="javascript">return { transformed: true };</script>
+    </scriptTask>
+    <sendTask id="notify" name="Notify">
+      <extensionElements>
+        <lc:messageRef>orders.completed</lc:messageRef>
+        <lc:taskType>webhook-notify</lc:taskType>
+      </extensionElements>
+    </sendTask>
+    <endEvent id="end" name="Done"/>
+    <sequenceFlow id="f1" sourceRef="start" targetRef="fetch"/>
+    <sequenceFlow id="f2" sourceRef="fetch" targetRef="transform"/>
+    <sequenceFlow id="f3" sourceRef="transform" targetRef="notify"/>
+    <sequenceFlow id="f4" sourceRef="notify" targetRef="end"/>
+  </process>
+</definitions>

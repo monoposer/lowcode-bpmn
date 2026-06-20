@@ -19,7 +19,7 @@ cmd/server/              HTTP entrypoint, CORS, worker startup
 internal/api/            Chi routes, metrics, JSON error envelope
 internal/bpmn/           JSON model, validate, registry, conditions
 internal/engine/         Engine, worker, engine.Store interface, domain types
-internal/script/         ScriptTask runner (set: DSL + goja JS)
+internal/script/         ScriptTask runner (goja JS + log; http.* in JS)
 internal/store/
   open.go                STORE_BACKEND factory (db | file | memory)
   gormstore/             Postgres / MySQL / SQLite via GORM
@@ -73,7 +73,7 @@ JSON Schema: [`schemas/process-definition.schema.json`](./schemas/process-defini
 - **Assignee sync (canonical)**: upper systems adapt their events → `POST /api/v1/assignee-sync/remove-user` or `/replace`, or plugin adapters via `POST /api/v1/events/assignee/{source}`.
 - **Event plugins**: triple consumers (`assignee` + `trigger` + `task`), WASM + capabilities. See [docs/plugins.md](./docs/plugins.md).
 - **subProcess**: marker with `scopeId`, `entryRef`, `exitRef` for scoped parallel work.
-- **scriptTask**: `set:key=value` or `scriptLang: "javascript"` (goja; `vars` / `variables` in scope).
+- **scriptTask**: `scriptLang: "javascript"` (default) or `"log"`; JS has `vars`, `http.get/post/request`
 - **Conditions** (`internal/bpmn/expression.go`): `==`, `!=`, numeric compares, truthy field; dot paths supported (`item.kk >= 10`).
 
 Each deploy creates a **new version**. Instances pin `definition_snapshot` at start.

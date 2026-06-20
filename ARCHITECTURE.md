@@ -104,8 +104,8 @@ JSON protocol and examples: [`schemas/`](./schemas/README.md).
   - **Complete** with `{ "assignee", "action": "approve|reject", "comment", "lockVersion" }`
   - **onReject**: `return` (default, rewind to upstream) | `terminateScope`
 - **scriptTask** — runs via `internal/script`:
-  - `set:var=value` DSL (always available)
-  - `scriptLang: "javascript"` — goja (`vars` / `variables` in scope)
+  - `scriptLang: "javascript"` (default) — goja with `vars` / `variables`, `http.get|post|request`, merge `return` + `vars` mutations
+  - `scriptLang: "log"` — structured log only
 - **subProcess** — marker with `scopeId`, `entryRef`, `exitRef` for scoped parallel work and reject/terminate boundaries
 
 ### Gateway behavior

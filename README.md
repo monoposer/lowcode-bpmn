@@ -58,8 +58,28 @@ Complete task with optimistic lock:
 
 ## ScriptTask
 
-- `set:key=value` — always available
-- `scriptLang: "javascript"` — executed via goja (`vars` / `variables` object in scope)
+Set `scriptLang` on the element:
+
+| `scriptLang` | Behavior |
+|--------------|----------|
+| `javascript` / `js` (default when omitted) | goja; `vars` / `variables` in scope; `return { key: value }` merges into instance variables |
+| `log` | Structured log only; no variable changes |
+
+HTTP from JavaScript (uses request context + `SCRIPT_TIMEOUT`, default 10s):
+
+```javascript
+var resp = http.get("https://api.example.com/status");
+var data = JSON.parse(resp.body); // resp.status, resp.headers, resp.body
+
+http.post("https://hooks.example.com/notify", JSON.stringify({ id: vars.orderId }));
+
+http.request("PATCH", "https://api.example.com/orders/" + vars.id, {
+  headers: { "Authorization": "Bearer " + vars.token },
+  body: JSON.stringify({ status: "done" })
+});
+
+return { notified: resp.status === 200 };
+```
 
 ## Tests
 

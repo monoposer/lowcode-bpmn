@@ -12,6 +12,7 @@ import (
 	"github.com/monoposer/lowcode-bpmn/internal/api"
 	"github.com/monoposer/lowcode-bpmn/internal/engine"
 	"github.com/monoposer/lowcode-bpmn/internal/plugin"
+	"github.com/monoposer/lowcode-bpmn/internal/script"
 	"github.com/monoposer/lowcode-bpmn/internal/store"
 	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 	"github.com/monoposer/lowcode-bpmn/pkg/env"
@@ -53,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	eng := engine.NewEngine(st, nil)
+	eng := engine.NewEngine(st, script.DefaultRunner())
 	if env.Bool("ASYNC_EXECUTION", false) {
 		eng.SetAsync(true)
 		slog.Info("async execution enabled")

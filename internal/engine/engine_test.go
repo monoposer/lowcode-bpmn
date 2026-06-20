@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
@@ -16,7 +17,7 @@ func approvalProcess() bpmn.ProcessDefinition {
 		Elements: []bpmn.Element{
 			{ID: "start", Kind: bpmn.KindStartEvent, Name: "Start"},
 			{ID: "review", Kind: bpmn.KindUserTask, Name: "Review", Assignees: []string{"manager"}},
-			{ID: "notify", Kind: bpmn.KindScriptTask, Name: "Notify", Script: "set:notified=true"},
+			{ID: "notify", Kind: bpmn.KindScriptTask, Name: "Notify", ScriptLang: "javascript", Script: "return { notified: true }"},
 			{ID: "end", Kind: bpmn.KindEndEvent, Name: "Done"},
 		},
 		Flows: []bpmn.SequenceFlow{
@@ -49,7 +50,7 @@ func TestAutoCompleteUserTask(t *testing.T) {
 	if inst.Status != engine.ProcessStatusCompleted {
 		t.Fatalf("expected completed, got %s active=%v", inst.Status, inst.ActiveElements)
 	}
-	if inst.Variables["notified"] != "true" {
+	if inst.Variables["notified"] != true {
 		t.Fatalf("expected script to set notified=true, got %v", inst.Variables["notified"])
 	}
 }
@@ -103,8 +104,8 @@ func TestExclusiveGateway(t *testing.T) {
 		Elements: []bpmn.Element{
 			{ID: "start", Kind: bpmn.KindStartEvent},
 			{ID: "gw", Kind: bpmn.KindExclusiveGateway},
-			{ID: "high", Kind: bpmn.KindScriptTask, Script: "set:path=high"},
-			{ID: "low", Kind: bpmn.KindScriptTask, Script: "set:path=low"},
+			{ID: "high", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { path: "high" }`},
+			{ID: "low", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { path: "low" }`},
 			{ID: "end", Kind: bpmn.KindEndEvent},
 		},
 		Flows: []bpmn.SequenceFlow{
@@ -138,8 +139,8 @@ func TestExclusiveGateway_nestedCondition(t *testing.T) {
 		Elements: []bpmn.Element{
 			{ID: "start", Kind: bpmn.KindStartEvent},
 			{ID: "gw", Kind: bpmn.KindExclusiveGateway},
-			{ID: "high", Kind: bpmn.KindScriptTask, Script: "set:path=high"},
-			{ID: "low", Kind: bpmn.KindScriptTask, Script: "set:path=low"},
+			{ID: "high", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { path: "high" }`},
+			{ID: "low", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { path: "low" }`},
 			{ID: "end", Kind: bpmn.KindEndEvent},
 		},
 		Flows: []bpmn.SequenceFlow{
@@ -175,8 +176,8 @@ func TestParallelGateway(t *testing.T) {
 		Elements: []bpmn.Element{
 			{ID: "start", Kind: bpmn.KindStartEvent},
 			{ID: "fork", Kind: bpmn.KindParallelGateway},
-			{ID: "a", Kind: bpmn.KindScriptTask, Script: "set:a=1"},
-			{ID: "b", Kind: bpmn.KindScriptTask, Script: "set:b=2"},
+			{ID: "a", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { a: 1 }`},
+			{ID: "b", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `return { b: 2 }`},
 			{ID: "join", Kind: bpmn.KindParallelGateway},
 			{ID: "end", Kind: bpmn.KindEndEvent},
 		},
@@ -198,7 +199,123 @@ func TestParallelGateway(t *testing.T) {
 	if inst.Status != engine.ProcessStatusCompleted {
 		t.Fatalf("expected completed, got %s", inst.Status)
 	}
-	if inst.Variables["a"] != "1" || inst.Variables["b"] != "2" {
+	if inst.Variables["a"] != int64(1) || inst.Variables["b"] != int64(2) {
 		t.Fatalf("expected parallel branches to run, vars=%v", inst.Variables)
+	}
+}
+
+func TestScriptTaskJSReturnMergeVariables(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	eng := engine.NewEngine(store, nil)
+
+	def := bpmn.ProcessDefinition{
+		ID: "script-merge",
+		Elements: []bpmn.Element{
+			{ID: "start", Kind: bpmn.KindStartEvent},
+			{ID: "run", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `
+				vars.seed = vars.input * 2;
+				return { output: vars.seed + 1 };
+			`},
+			{ID: "end", Kind: bpmn.KindEndEvent},
+		},
+		Flows: []bpmn.SequenceFlow{
+			{ID: "f1", SourceRef: "start", TargetRef: "run"},
+			{ID: "f2", SourceRef: "run", TargetRef: "end"},
+		},
+	}
+	_ = store.InsertProcessVersion(ctx, &engine.DeployedProcess{TenantID: "t", Key: "script-merge", Definition: def})
+
+	inst, err := eng.StartProcess(ctx, engine.StartProcessRequest{
+		TenantID: "t", ProcessKey: "script-merge", Variables: map[string]any{"input": 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Variables["seed"] != int64(10) {
+		t.Fatalf("expected vars mutation merge, got seed=%v", inst.Variables["seed"])
+	}
+	if inst.Variables["output"] != int64(11) {
+		t.Fatalf("expected return merge, got output=%v", inst.Variables["output"])
+	}
+}
+
+func TestScriptTaskJSErrorMarksActivityFailed(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	eng := engine.NewEngine(store, nil)
+
+	def := bpmn.ProcessDefinition{
+		ID: "script-error",
+		Elements: []bpmn.Element{
+			{ID: "start", Kind: bpmn.KindStartEvent},
+			{ID: "run", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: `throw new Error("boom");`},
+			{ID: "end", Kind: bpmn.KindEndEvent},
+		},
+		Flows: []bpmn.SequenceFlow{
+			{ID: "f1", SourceRef: "start", TargetRef: "run"},
+			{ID: "f2", SourceRef: "run", TargetRef: "end"},
+		},
+	}
+	_ = store.InsertProcessVersion(ctx, &engine.DeployedProcess{TenantID: "t", Key: "script-error", Definition: def})
+
+	inst, err := eng.StartProcess(ctx, engine.StartProcessRequest{TenantID: "t", ProcessKey: "script-error"})
+	if err == nil {
+		t.Fatal("expected start to fail on script error")
+	}
+	if inst.Status != engine.ProcessStatusFailed {
+		t.Fatalf("expected instance failed, got %s", inst.Status)
+	}
+
+	acts, err := eng.ListActivities(ctx, inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scriptAct *engine.ActivityInstance
+	for _, a := range acts {
+		if a.ElementID == "run" {
+			scriptAct = a
+			break
+		}
+	}
+	if scriptAct == nil {
+		t.Fatal("script activity not found")
+	}
+	if scriptAct.Status != engine.ActivityStatusFailed {
+		t.Fatalf("expected activity failed, got %s", scriptAct.Status)
+	}
+	if scriptAct.ErrorMsg == "" {
+		t.Fatal("expected activity error message")
+	}
+}
+
+func TestScriptTaskEmptyScriptFails(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	eng := engine.NewEngine(store, nil)
+
+	def := bpmn.ProcessDefinition{
+		ID: "script-empty",
+		Elements: []bpmn.Element{
+			{ID: "start", Kind: bpmn.KindStartEvent},
+			{ID: "run", Kind: bpmn.KindScriptTask, ScriptLang: "javascript", Script: ""},
+			{ID: "end", Kind: bpmn.KindEndEvent},
+		},
+		Flows: []bpmn.SequenceFlow{
+			{ID: "f1", SourceRef: "start", TargetRef: "run"},
+			{ID: "f2", SourceRef: "run", TargetRef: "end"},
+		},
+	}
+	_ = store.InsertProcessVersion(ctx, &engine.DeployedProcess{TenantID: "t", Key: "script-empty", Definition: def})
+
+	inst, err := eng.StartProcess(ctx, engine.StartProcessRequest{TenantID: "t", ProcessKey: "script-empty"})
+	if err == nil {
+		t.Fatal("expected start to fail on empty script")
+	}
+	if inst != nil {
+		t.Fatalf("expected nil instance on definition validation error, got %v", inst)
+	}
+	if !strings.Contains(err.Error(), "requires script") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -8,13 +8,23 @@ const (
 	KindEndEvent           ElementKind = "endEvent"
 	KindUserTask           ElementKind = "userTask"
 	KindScriptTask         ElementKind = "scriptTask"
+	KindServiceTask        ElementKind = "serviceTask"
+	KindSendTask           ElementKind = "sendTask"
+	KindReceiveTask        ElementKind = "receiveTask"
+	KindBusinessRuleTask   ElementKind = "businessRuleTask"
 	KindExclusiveGateway   ElementKind = "exclusiveGateway"
 	KindParallelGateway    ElementKind = "parallelGateway"
 	KindInclusiveGateway   ElementKind = "inclusiveGateway"
 	KindSubProcess         ElementKind = "subProcess"
 )
 
-// ProcessDefinition is a deployable BPMN process (JSON form, designer-friendly).
+// AutomatedTaskKinds are task types that need no human assignee (BPMN 2.0 automation).
+var AutomatedTaskKinds = []ElementKind{
+	KindScriptTask, KindServiceTask, KindSendTask, KindReceiveTask, KindBusinessRuleTask,
+}
+
+// ProcessDefinition is the internal IR for a deployable BPMN 2.0 process.
+// File storage and interchange use BPMN XML (.bpmn20.xml); JSON is supported for API/designer.
 type ProcessDefinition struct {
 	ID          string         `json:"id"`
 	Name        string         `json:"name"`
@@ -40,6 +50,13 @@ type Element struct {
 	ExitRef      string         `json:"exitRef,omitempty"`  // subProcess inner exit (join/end)
 	Script       string         `json:"script,omitempty"`
 	ScriptLang  string         `json:"scriptLang,omitempty"`
+	// BPMN 2.0 task extensions (also mapped to extensionElements in XML).
+	TaskType       string `json:"taskType,omitempty"`       // business subtype e.g. data-sync, export
+	Implementation string `json:"implementation,omitempty"` // serviceTask: http, delegate
+	ServiceURL     string `json:"serviceUrl,omitempty"`
+	ServiceMethod  string `json:"serviceMethod,omitempty"`
+	MessageRef     string `json:"messageRef,omitempty"`     // receiveTask / sendTask
+	DecisionRef    string `json:"decisionRef,omitempty"`  // businessRuleTask
 	AutoComplete bool             `json:"autoComplete,omitempty"`
 	EventDefinition *EventDefinition `json:"eventDefinition,omitempty"` // BPMN 2.0 startEvent trigger (not sequenceFlow condition)
 	Properties  map[string]any `json:"properties,omitempty"`

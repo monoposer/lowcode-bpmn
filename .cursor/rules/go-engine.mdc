@@ -26,5 +26,5 @@ alwaysApply: false
 
 ## Scripts
 
-- `internal/script`: `set:k=v` DSL always available; JS via goja when `scriptLang: "javascript"`
+- `internal/script`: `scriptLang` `js` (default) or `log`; JS exposes `http.get/post/request`
 - Do not expose unrestricted network/file access in scripts without explicit security review

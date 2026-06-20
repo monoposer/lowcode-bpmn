@@ -20,6 +20,8 @@ type Engine struct {
 }
 
 // NewEngine constructs a BPMN engine. Async execution is off by default (sync).
+// scriptExec may be nil (uses script.NewExecutor()), script.DefaultRunner(), or a custom
+// script.Runner (HTTP remote, tenant router, sandbox wrapper) without changing engine logic.
 func NewEngine(store Store, scriptExec script.Runner) *Engine {
 	if scriptExec == nil {
 		scriptExec = script.NewExecutor()
@@ -68,6 +70,14 @@ func (e *Engine) ListProcesses(ctx context.Context, tenantID string) ([]*Deploye
 		return nil, errors.New("engine: store not configured")
 	}
 	return e.store.ListProcesses(ctx, tenantID)
+}
+
+// GetProcess returns the latest deployed process version for a tenant/key.
+func (e *Engine) GetProcess(ctx context.Context, tenantID, key string) (*DeployedProcess, error) {
+	if e.store == nil {
+		return nil, errors.New("engine: store not configured")
+	}
+	return e.store.GetProcess(ctx, tenantID, key)
 }
 
 type StartProcessRequest struct {
@@ -473,8 +483,23 @@ func (e *Engine) activateElement(ctx context.Context, state *execState, elementI
 		}
 		return e.tryCompleteProcess(ctx, state)
 
+	case bpmn.KindServiceTask, bpmn.KindSendTask, bpmn.KindBusinessRuleTask:
+		out, err := e.runAutomatedTask(ctx, state, el, act)
+		return e.completeAutomatedTask(ctx, state, elementID, act, out, err)
+
+	case bpmn.KindReceiveTask:
+		return e.activateReceiveTask(ctx, state, el, act)
+
 	case bpmn.KindScriptTask:
-		out, err := e.script.Run(ctx, el.Script, el.ScriptLang, state.inst.Variables)
+		out, err := e.script.Run(ctx, script.RunRequest{
+			Script:     el.Script,
+			Lang:       el.ScriptLang,
+			Variables:  state.inst.Variables,
+			InstanceID: state.inst.ID.String(),
+			ElementID:  elementID,
+			TenantID:   state.inst.TenantID,
+			ProcessKey: state.inst.ProcessKey,
+		})
 		if err != nil {
 			act.Status = ActivityStatusFailed
 			act.ErrorMsg = err.Error()
