@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"lowcode-bpmn/internal/bpmn"
-	"lowcode-bpmn/internal/engine"
-	memstore "lowcode-bpmn/internal/store/memory"
+	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/engine"
+	memstore "github.com/monoposer/lowcode-bpmn/internal/store/memory"
 )
 
 func TestAsyncStartProcess(t *testing.T) {

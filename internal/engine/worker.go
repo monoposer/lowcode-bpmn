@@ -2,8 +2,9 @@ package engine
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 )
 
 // Worker polls and executes async BPMN jobs.
@@ -31,7 +32,7 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := w.engine.ProcessNextJob(ctx); err != nil {
-				log.Printf("[worker] job error: %v", err)
+				telemetry.Ctx(ctx).Error("worker job failed", "error", err)
 			}
 		}
 	}

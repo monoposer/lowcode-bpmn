@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"lowcode-bpmn/internal/bpmn"
-	"lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/engine"
 )
 
 type Store struct {

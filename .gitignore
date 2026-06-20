@@ -13,3 +13,9 @@
 # Go
 *.test
 coverage.out
+
+# Local env
+.env
+
+# File store data
+/data/

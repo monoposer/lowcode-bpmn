@@ -9,14 +9,26 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md).
 ## Getting Started
 
 ```bash
+# PostgreSQL (default)
+export DB_DRIVER=postgres
 export DATABASE_URL="postgres://user:pass@localhost:5432/lowcode_bpmn?sslmode=disable"
+
+# MySQL
+export DB_DRIVER=mysql
+export DATABASE_URL="user:pass@tcp(localhost:3306)/lowcode_bpmn?charset=utf8mb4&parseTime=True&loc=Local"
+
+# SQLite
+export DB_DRIVER=sqlite
+export DATABASE_URL="file:lowcode.db?cache=shared&_pragma=foreign_keys(1)"
+
 go run ./cmd/server
 ```
 
 | Env | Default | Description |
 |-----|---------|-------------|
 | `HTTP_ADDR` | `:8080` | Listen address |
-| `DATABASE_URL` | (required) | PostgreSQL DSN |
+| `DB_DRIVER` | `postgres` | Database driver: `postgres`, `mysql`, or `sqlite` |
+| `DATABASE_URL` | (required) | Database DSN for the selected driver |
 | `ASYNC_EXECUTION` | `false` | Enable async worker for start/continue |
 | `WORKER_INTERVAL` | `500ms` | Job poll interval |
 

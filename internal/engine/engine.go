@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"lowcode-bpmn/internal/bpmn"
-	"lowcode-bpmn/internal/script"
+	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/script"
 )
 
 // Engine executes BPMN 2.0 process definitions.

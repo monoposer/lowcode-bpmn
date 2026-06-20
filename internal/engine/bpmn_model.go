@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
 )
 
 var ErrVersionConflict = errors.New("process instance was modified concurrently")
@@ -100,8 +100,8 @@ type ProcessInstance struct {
 	UpdatedAt          time.Time             `json:"updated_at"`
 	LockVersion        int                   `json:"lock_version"`
 
-	DefinitionSnapshot bpmn.ProcessDefinition `json:"-"`
-	InternalState      map[string]any         `json:"-"`
+	DefinitionSnapshot bpmn.ProcessDefinition `json:"-" yaml:"definition_snapshot,omitempty"`
+	InternalState      map[string]any         `json:"-" yaml:"internal_state,omitempty"`
 }
 
 // ActivityInstance records execution of a BPMN element within a process instance.

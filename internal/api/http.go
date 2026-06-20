@@ -10,8 +10,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
-	"lowcode-bpmn/internal/bpmn"
-	"lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 )
 
 // RouterDeps holds shared handlers for HTTP routes.
@@ -25,8 +26,9 @@ func NewHTTPRouter(deps RouterDeps) http.Handler {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	r.Use(telemetry.OTelMiddleware("lowcode-bpmn"))
+	r.Use(telemetry.HTTPLogMiddleware)
+	r.Use(telemetry.RecoverMiddleware)
 	r.Use(middleware.Timeout(60 * time.Second))
 	r.Use(metricsMiddleware)
 

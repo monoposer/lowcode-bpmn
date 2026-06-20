@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,42 +10,54 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-
-	"lowcode-bpmn/internal/api"
-	"lowcode-bpmn/internal/engine"
-	pgstore "lowcode-bpmn/internal/store/postgres"
+	"github.com/monoposer/lowcode-bpmn/internal/api"
+	"github.com/monoposer/lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/store"
+	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 )
 
 func main() {
+	ctx := context.Background()
+	telCfg := telemetry.LoadConfig()
+
+	shutdownTelemetry, err := telemetry.Init(ctx, telCfg)
+	if err != nil {
+		slog.Error("failed to init telemetry", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer func() {
+		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shCtx); err != nil {
+			slog.Error("telemetry shutdown failed", slog.String("error", err.Error()))
+		}
+	}()
+
 	addr := getEnv("HTTP_ADDR", ":8080")
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		log.Fatal("DATABASE_URL is not set (e.g. postgres://user:pass@host:5432/dbname)")
-	}
-
-	db, err := sql.Open("pgx", dsn)
+	storeCfg, err := store.LoadConfig()
 	if err != nil {
-		log.Fatalf("failed to open postgres connection: %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		log.Fatalf("failed to ping postgres: %v", err)
+		slog.Error("invalid store config", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
-	rootCtx := context.Background()
-	store, err := pgstore.NewStore(rootCtx, db)
+	st, err := store.Open(ctx, storeCfg)
 	if err != nil {
-		log.Fatalf("failed to init postgres store: %v", err)
+		slog.Error("failed to open store", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	if err := store.Ping(ctx, st); err != nil {
+		slog.Error("failed to ping store", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
-	eng := engine.NewEngine(store, nil)
+	eng := engine.NewEngine(st, nil)
 	if getEnvBool("ASYNC_EXECUTION", false) {
 		eng.SetAsync(true)
-		log.Println("async execution enabled")
+		slog.Info("async execution enabled")
 	}
 
-	workerCtx, workerCancel := context.WithCancel(rootCtx)
+	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 	worker := engine.NewWorker(eng, getEnvDuration("WORKER_INTERVAL", 500*time.Millisecond))
 	go worker.Run(workerCtx)
@@ -62,9 +73,13 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("lowcode-bpmn listening on %s\n", addr)
+		slog.Info("server listening",
+			slog.String("addr", addr),
+			slog.String("store", store.Describe(storeCfg)),
+		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v\n", err)
+			slog.Error("listen failed", slog.String("error", err.Error()))
+			os.Exit(1)
 		}
 	}()
 
@@ -73,12 +88,12 @@ func main() {
 	<-stop
 
 	workerCancel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	log.Println("shutting down HTTP server...")
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("server shutdown error: %v\n", err)
+	slog.Info("shutting down http server")
+	if err := srv.Shutdown(shCtx); err != nil {
+		slog.Error("server shutdown error", slog.String("error", err.Error()))
 	}
 }
 
