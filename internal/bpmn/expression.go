@@ -6,12 +6,14 @@ import (
 	"strings"
 )
 
-// EvalCondition evaluates a simple BPMN condition against process variables.
+// EvalCondition evaluates a BPMN condition against process variables.
 // Supported forms:
 //   - "field == value" (string or numeric)
 //   - "field != value"
 //   - "field >= value", "field > value", "field <= value", "field < value" (numeric)
 //   - "field" (truthy check)
+//
+// Field names support dot paths into nested variables (JSON-path style), e.g. item.kk, order.amount.
 // Empty condition evaluates to true.
 func EvalCondition(expr string, vars map[string]any) (bool, error) {
 	expr = strings.TrimSpace(expr)
@@ -28,7 +30,7 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
 			right = strings.Trim(right, "\"'")
-			v, ok := vars[left]
+			v, ok := resolveVarPath(vars, left)
 			if !ok {
 				if op == "!=" {
 					return true, nil
@@ -47,7 +49,7 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 	}
 
 	// Bare field name — truthy.
-	v, ok := vars[expr]
+	v, ok := resolveVarPath(vars, expr)
 	if !ok {
 		return false, nil
 	}
@@ -63,6 +65,31 @@ func EvalCondition(expr string, vars map[string]any) (bool, error) {
 	default:
 		return v != nil, nil
 	}
+}
+
+// resolveVarPath walks dot-separated segments through nested map variables.
+func resolveVarPath(vars map[string]any, path string) (any, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, false
+	}
+
+	cur := any(vars)
+	for _, seg := range strings.Split(path, ".") {
+		if seg == "" {
+			return nil, false
+		}
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		v, ok := m[seg]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
 }
 
 func compareNumericOp(left any, right string, op string) (bool, error) {

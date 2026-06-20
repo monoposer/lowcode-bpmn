@@ -11,6 +11,7 @@ const (
 	KindExclusiveGateway   ElementKind = "exclusiveGateway"
 	KindParallelGateway    ElementKind = "parallelGateway"
 	KindInclusiveGateway   ElementKind = "inclusiveGateway"
+	KindSubProcess         ElementKind = "subProcess"
 )
 
 // ProcessDefinition is a deployable BPMN process (JSON form, designer-friendly).
@@ -28,10 +29,19 @@ type Element struct {
 	Kind        ElementKind    `json:"type"`
 	Name        string         `json:"name,omitempty"`
 	Description string         `json:"description,omitempty"`
-	Assignees   []string       `json:"assignees,omitempty"`
-	Script      string         `json:"script,omitempty"`
+	Assignees          []string       `json:"assignees,omitempty"`
+	AssigneesVariable  string         `json:"assigneesVariable,omitempty"` // dot path in instance variables
+	ApprovalMode       string         `json:"approvalMode,omitempty"`
+	RequiredApprovals  int            `json:"requiredApprovals,omitempty"`
+	ReturnTo     string         `json:"returnTo,omitempty"`
+	OnReject     string         `json:"onReject,omitempty"` // return (default) | terminateScope
+	ScopeID      string         `json:"scopeId,omitempty"`
+	EntryRef     string         `json:"entryRef,omitempty"` // subProcess inner entry
+	ExitRef      string         `json:"exitRef,omitempty"`  // subProcess inner exit (join/end)
+	Script       string         `json:"script,omitempty"`
 	ScriptLang  string         `json:"scriptLang,omitempty"`
-	AutoComplete bool          `json:"autoComplete,omitempty"`
+	AutoComplete bool             `json:"autoComplete,omitempty"`
+	EventDefinition *EventDefinition `json:"eventDefinition,omitempty"` // BPMN 2.0 startEvent trigger (not sequenceFlow condition)
 	Properties  map[string]any `json:"properties,omitempty"`
 }
 

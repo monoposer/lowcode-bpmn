@@ -27,9 +27,16 @@ func Validate(def ProcessDefinition) error {
 		switch el.Kind {
 		case KindStartEvent:
 			startCount++
+			if err := ValidateStartEventEventDefinition(el); err != nil {
+				return err
+			}
 		case KindScriptTask:
 			if el.Script == "" {
 				return fmt.Errorf("scriptTask %s requires script", el.ID)
+			}
+		case KindUserTask:
+			if err := ValidateUserTaskApproval(el); err != nil {
+				return err
 			}
 		}
 	}
@@ -64,7 +71,8 @@ func isSupportedKind(k ElementKind) bool {
 	switch k {
 	case KindStartEvent, KindEndEvent,
 		KindUserTask, KindScriptTask,
-		KindExclusiveGateway, KindParallelGateway, KindInclusiveGateway:
+		KindExclusiveGateway, KindParallelGateway, KindInclusiveGateway,
+		KindSubProcess:
 		return true
 	default:
 		return false

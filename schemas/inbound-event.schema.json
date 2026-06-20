@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/monoposer/lowcode-bpmn/schemas/inbound-event.schema.json",
+  "title": "Inbound Event Envelope",
+  "description": "Transport-agnostic event delivered to adapter plugins via Consumer or POST /api/v1/events/{stream}/{source}",
+  "type": "object",
+  "required": ["source"],
+  "properties": {
+    "id": { "type": "string" },
+    "stream": {
+      "type": "string",
+      "enum": ["assignee", "trigger", "task"],
+      "description": "assignee = personnel sync; trigger = process start; task = approve/reject"
+    },
+    "source": {
+      "type": "string",
+      "description": "Adapter key: feishu, wecom, airtable, generic, …"
+    },
+    "topic": { "type": "string" },
+    "tenant_id": { "type": "string" },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+    "payload": { "description": "Opaque bytes — adapter parses vendor format" },
+    "received_at": { "type": "string", "format": "date-time" }
+  }
+}

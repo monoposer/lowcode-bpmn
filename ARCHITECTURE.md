@@ -8,7 +8,8 @@
 |-----------|------|
 | **Process designer** (external) | Produces BPMN JSON definitions |
 | **lowcode-bpmn** (this service) | Deploys definitions, runs instances, waits on UserTask, executes ScriptTask |
-| **Business apps** | Complete tasks, query inbox, read variables |
+| **Business apps / IM platforms** | Complete tasks, query inbox, push webhooks via plugin adapters |
+| **Plugin adapters** (`plugins/go`, `plugins/wasm`) | Map Feishu / WeCom / Airtable / custom payloads → Host SDK |
 
 The codebase is a **pure BPMN 2.0 engine** (legacy stage/DAG orchestration has been removed).
 
@@ -19,6 +20,7 @@ flowchart TB
     subgraph External["External systems"]
         Designer["Process designer"]
         BizApp["Business applications"]
+        Webhooks["Feishu / WeCom / Airtable"]
     end
 
     subgraph Service["lowcode-bpmn"]
@@ -27,31 +29,50 @@ flowchart TB
         Worker["Job worker"]
         BPMN["internal/bpmn"]
         Script["internal/script"]
+        Plugin["internal/plugin"]
+        Event["internal/event"]
         Store["engine.Store"]
-        PG["postgres.Store"]
+        GORM["gormstore"]
+        File["filestore"]
         Mem["memory.Store"]
     end
 
-    DB[(PostgreSQL)]
+    subgraph Plugins["plugins/ (external)"]
+        GoPlug["go/feishu, wecom, airtable, …"]
+        WasmPlug["wasm/* + capability manifest"]
+        SDK["sdk + registry"]
+    end
+
+    DB[(PostgreSQL / MySQL / SQLite)]
 
     Designer -->|BPMN JSON| API
     BizApp -->|Complete task / inbox| API
+    Webhooks -->|POST /events/{stream}/{source}| API
+    API --> Event
+    Event --> Plugin
+    Plugin --> GoPlug
+    Plugin --> WasmPlug
+    GoPlug --> SDK
+    Plugin -->|Host SDK| Engine
     API --> Engine
     Worker --> Engine
     Engine --> BPMN
     Engine --> Script
     Engine --> Store
-    Store --> PG
+    Store --> GORM
+    Store --> File
     Store --> Mem
-    PG --> DB
+    GORM --> DB
 ```
 
 ### Startup (`cmd/server/main.go`)
 
-1. Connect to PostgreSQL (`DATABASE_URL`)
-2. Initialize `postgres.Store` and apply SQL migrations
-3. Create `engine.Engine` and start the background job worker
-4. Mount Chi HTTP routes, CORS, and graceful shutdown
+1. Initialize **telemetry** (structured logging + optional OpenTelemetry via `OTEL_ENABLED`)
+2. Open **store** via `store.Open` (`STORE_BACKEND=db|file|memory`; DB drivers: postgres, mysql, sqlite)
+3. Create `engine.Engine`; optionally enable async execution (`ASYNC_EXECUTION=true`)
+4. **Plugin bootstrap** — triple event consumers + Go/WASM adapters (`plugin.BootstrapFromEngine`)
+5. Start **three stream consumers** (assignee / trigger / task) and background **job worker**
+6. Mount Chi HTTP routes, CORS, metrics, graceful shutdown
 
 ## BPMN 2.0 model
 
@@ -59,8 +80,8 @@ Supported elements:
 
 | Category | Elements |
 |----------|----------|
-| **Event** | `startEvent`, `endEvent` |
-| **Activity** | `userTask`, `scriptTask` |
+| **Event** | `startEvent` (+ `eventDefinition`), `endEvent` |
+| **Activity** | `userTask`, `scriptTask`, `subProcess` (scoped parallel regions) |
 | **Gateway** | `exclusiveGateway`, `parallelGateway`, `inclusiveGateway` |
 | **Flow** | `sequenceFlow` (optional condition expression) |
 
@@ -69,16 +90,23 @@ Process definitions are JSON documents (`internal/bpmn`):
 ```
 ProcessDefinition
 ├── id, name
-├── elements[]     — BPMN nodes (type, assignees, script, …)
+├── elements[]     — BPMN nodes (type, assignees, script, eventDefinition, …)
 └── flows[]        — sequenceFlow (sourceRef, targetRef, condition)
 ```
 
+JSON protocol and examples: [`schemas/`](./schemas/README.md).
+
 ### Task types
 
-- **userTask** — waits for external completion via API (`assignees` is routing metadata only)
+- **userTask** — waits for external completion via API or plugin (`assignees` / `assigneesVariable`)
+  - **Approval modes**: `any` (或签), `all` (会签), `sequential` (顺序签)
+  - **requiredApprovals** — quota within assignee pool (GitHub-style review count for `any`)
+  - **Complete** with `{ "assignee", "action": "approve|reject", "comment", "lockVersion" }`
+  - **onReject**: `return` (default, rewind to upstream) | `terminateScope`
 - **scriptTask** — runs via `internal/script`:
   - `set:var=value` DSL (always available)
-  - `scriptLang: "javascript"` — executed with goja (`vars` / `variables` in scope)
+  - `scriptLang: "javascript"` — goja (`vars` / `variables` in scope)
+- **subProcess** — marker with `scopeId`, `entryRef`, `exitRef` for scoped parallel work and reject/terminate boundaries
 
 ### Gateway behavior
 
@@ -88,17 +116,17 @@ ProcessDefinition
 | parallelGateway | All outgoing flows | Wait for all incoming flows |
 | inclusiveGateway | All matching conditions | Same as parallel |
 
-Conditions support simple expressions: `field == value`, `amount >= 1000`, truthy field names, etc. (`internal/bpmn/expression.go`).
+Conditions support simple expressions: `field == value`, `amount >= 1000`, dot paths (`event.fields.status == Pending`), truthy field names (`internal/bpmn/expression.go`).
 
-Join state is stored in `ProcessInstance.InternalState` (persisted as `bpmn_instances.internal_state`, **not exposed via API**).
+Join state is stored in `ProcessInstance.InternalState` (persisted in DB, **not exposed via API**).
 
 ## Runtime objects
 
 | Object | Description |
 |--------|-------------|
 | `DeployedProcess` | `(tenant_id, process_key, version)` → `ProcessDefinition` |
-| `ProcessInstance` | Running/completed instance with pinned `definition_snapshot`, `variables`, `lock_version` |
-| `ActivityInstance` | Per-element execution audit trail |
+| `ProcessInstance` | Running/completed instance with pinned `definition_snapshot`, `variables`, `lock_version`, `business_key` |
+| `ActivityInstance` | Per-element audit trail; `scope_id`, `branch_flow_id`, `outcome` (approve/reject/cancelled) |
 | `Job` | Async continuation unit (`start` or `continue`) |
 | `UserTask` | Inbox query DTO (active userTask + process context) |
 
@@ -107,9 +135,9 @@ Each deploy creates a **new process version**. Instances pin the definition snap
 ## Execution flow
 
 1. **Deploy** — validate graph, insert new version row
-2. **Start** — create instance with pinned snapshot; run from all `startEvent` nodes (sync or async)
+2. **Start** — manual API, message trigger, or plugin adapter → create instance with pinned snapshot
 3. **Traverse** — follow `sequenceFlow`; gateways branch/join per BPMN semantics
-4. **UserTask** — instance stays `running`, activity stays `active` until `complete`
+4. **UserTask** — instance stays `running`, activity stays `active` until complete or reject handling
 5. **ScriptTask** — execute script, merge output into variables, continue
 6. **EndEvent** — when no active activities remain, instance → `completed`
 
@@ -118,23 +146,30 @@ Each deploy creates a **new process version**. Instances pin the definition snap
 | Mode | Config | Behavior |
 |------|--------|----------|
 | **Sync** (default) | — | `StartProcess` / `CompleteTask` advance the token to the next wait point inside the HTTP request |
-| **Async** | `ASYNC_EXECUTION=true` | HTTP returns quickly; a background worker drains `bpmn_jobs` |
+| **Async** | `ASYNC_EXECUTION=true` | HTTP returns quickly; background worker drains `bpmn_jobs` |
 
-Worker poll interval: `WORKER_INTERVAL` (default `500ms`). Job claiming uses `FOR UPDATE SKIP LOCKED` for safe multi-replica polling.
+Worker poll interval: `WORKER_INTERVAL` (default `500ms`). Job claiming uses row locking for safe multi-replica polling (GORM store).
 
 ## Persistence
 
-Schema is defined in a single migration: `internal/store/postgres/migrations/001_bpmn_schema.up.sql`. Applied versions are tracked in `schema_migrations`.
+Store abstraction: `internal/store` → `engine.Store`.
+
+| Backend | Env | Use case |
+|---------|-----|----------|
+| **db** (default) | `STORE_BACKEND=db`, `DB_DRIVER=postgres\|mysql\|sqlite`, `DATABASE_URL` | Production |
+| **file** | `STORE_BACKEND=file`, `STORE_PATH=./data` | Local dev / single-node YAML |
+| **memory** | `STORE_BACKEND=memory` | Unit tests |
+
+GORM store (`internal/store/gormstore`) applies schema via **AutoMigrate** on startup.
 
 | Table | Purpose |
 |-------|---------|
 | `bpmn_processes` | Versioned definitions `(tenant_id, process_key, version)` |
-| `bpmn_instances` | Instances: `variables`, `internal_state`, `definition_snapshot`, `lock_version`, `active_elements` |
-| `bpmn_activities` | Element-level execution audit |
+| `bpmn_instances` | Instances: `variables`, `internal_state`, `definition_snapshot`, `lock_version`, `active_elements`, `business_key` |
+| `bpmn_activities` | Element-level execution audit (assignees, approval records, outcome) |
 | `bpmn_jobs` | Async job queue |
-| `schema_migrations` | Migration version tracking |
 
-`StartProcess` and `CompleteTask` run inside `Store.WithTx` for atomic writes.
+`StartProcess`, `CompleteTask`, and assignee sync paths run inside `Store.WithTx` for atomic writes.
 
 ## API
 
@@ -145,11 +180,19 @@ Schema is defined in a single migration: `internal/store/postgres/migrations/001
 | `PUT /api/v1/tenants/{tenantId}/processes/{key}` | Deploy new process version |
 | `GET /api/v1/tenants/{tenantId}/processes` | List latest version per process key |
 | `DELETE /api/v1/tenants/{tenantId}/processes/{key}` | Delete all versions for a key |
-| `POST /api/v1/process-instances` | Start instance |
+| `POST /api/v1/process-instances` | Start instance (manual / none start) |
+| `POST /api/v1/triggers/message` | Message start (direct or after adapter normalization) |
 | `GET /api/v1/process-instances/{id}` | Instance status, variables, `lock_version` |
 | `GET /api/v1/process-instances/{id}/activities` | Activity audit trail |
-| `POST /api/v1/process-instances/{id}/tasks/{activityId}/complete` | Complete UserTask |
+| `POST /api/v1/process-instances/{id}/tasks/{activityId}/complete` | Complete UserTask (approve/reject) |
+| `POST /api/v1/process-instances/{id}/terminate` | Terminate instance or sub-process scope |
+| `PATCH /api/v1/process-instances/{id}/tasks/{activityId}/assignees` | Manual assignee override |
 | `GET /api/v1/tasks?tenantId=&assignee=` | UserTask inbox |
+| `POST /api/v1/assignee-sync/remove-user` | Remove user from active tasks (HR offboarding) |
+| `POST /api/v1/assignee-sync/replace` | Replace assignees on one task |
+| `POST /api/v1/events/assignee/{source}` | Plugin ingress — HR / org change stream |
+| `POST /api/v1/events/trigger/{source}` | Plugin ingress — process start stream |
+| `POST /api/v1/events/task/{source}` | Plugin ingress — approve / reject stream |
 
 All handlers go through `engine.Engine` (no global store singleton).
 
@@ -161,64 +204,184 @@ All handlers go through `engine.Engine` (no global store singleton).
 
 Concurrent task completion with a stale `lockVersion` returns **409** with code `version_conflict`.
 
+## Event-driven start (BPMN 2.0)
+
+**Important:** `startEvent.eventDefinition` defines *when* a process may start. **Sequence flow `condition`** is only for routing at gateways — not for webhook filters.
+
+| BPMN 2.0 | JSON `eventDefinition.type` | Entry |
+|----------|----------------------------|-------|
+| None start | `none` / omitted | `POST /api/v1/process-instances` |
+| Message start | `message` + `messageRef` | `POST /api/v1/triggers/message` or plugin → Host |
+| Conditional start | `conditional` + `condition` | Evaluated on trigger payload |
+| Signal / Timer | `signal` / `timer` | External dispatcher (metadata in definition) |
+
+Example (Airtable row update):
+
+```json
+{
+  "id": "start",
+  "type": "startEvent",
+  "eventDefinition": {
+    "type": "message",
+    "messageRef": "airtable.orders.updated",
+    "correlationKey": "event.recordId",
+    "condition": "event.fields.status == Pending"
+  }
+}
+```
+
+End-to-end (recommended path):
+
+```
+Airtable webhook
+  → POST /api/v1/events/trigger/airtable
+  → plugins/go/airtable
+  → Host.TriggerMessage
+  → Engine starts matching message startEvent
+```
+
+Direct canonical trigger (bypass adapter):
+
+```
+POST /api/v1/triggers/message
+{ "tenantId", "messageRef", "variables" }
+```
+
+## Event plugins (Paca-style)
+
+Full reference: [docs/plugins.md](./docs/plugins.md), [plugins/README.md](./plugins/README.md).
+
+### Triple streams
+
+Three independent consumers decouple extension concerns:
+
+| Stream | Purpose | Example adapters | Host SDK |
+|--------|---------|------------------|----------|
+| **assignee** | HR / org change | feishu, wecom, generic | `RemoveUserFromActiveTasks`, `ReplaceTaskAssignees` |
+| **trigger** | Process start | airtable, feishu, generic | `TriggerMessage`, `StartProcess` |
+| **task** | External approve/reject | feishu, wecom, generic | `CompleteTask`, `Terminate` |
+
+```
+External event
+  → event.Consumer (memory | redis)
+  → plugin.Runtime (per stream)
+  → EventAdapter (plugins/go/* or plugins/wasm/*)
+  → Host SDK (internal/plugin/host.go)
+  → Engine
+```
+
+| Layer | Package | Role |
+|-------|---------|------|
+| Consumer | `internal/event`, `internal/event/setup` | Transport abstraction (memory, redis) |
+| Host SDK | `internal/plugin/contract`, `internal/plugin/host.go` | Capability-gated read/write API |
+| Go plugins | `plugins/go/*`, `plugins/registry` | Native vendor adapters |
+| WASM plugins | `plugins/wasm/*` | Sandboxed adapters with `plugin.json` capabilities |
+| Shared SDK | `plugins/sdk` | `Action` schema + `Apply*` helpers |
+| Ingress | `POST /api/v1/events/{assignee\|trigger\|task}/{source}` | HTTP → stream publisher |
+
+### Configuration
+
+| Env | Default | Notes |
+|-----|---------|-------|
+| `EVENT_CONSUMER` | `memory` | `redis` for multi-process ingress |
+| `EVENT_REDIS_*_KEY` | `bpmn:events:{stream}` | Per-stream Redis lists |
+| `PLUGIN_ASSIGNEE_ADAPTERS` | generic, canonical, feishu, wecom | Registry keys |
+| `PLUGIN_TRIGGER_ADAPTERS` | … + airtable | |
+| `PLUGIN_TASK_ADAPTERS` | generic, canonical, feishu, wecom | |
+| `PLUGIN_WASM_DIR` | (optional) | Loads `*/plugin.json` + `plugin.wasm` |
+| `PLUGIN_DEFAULT_TENANT` | `demo` | Adapter fallback tenant |
+
+Canonical adapter payload: `schemas/adapter-action.schema.json`.
+
+Assignee resolution at userTask activation: `assigneesVariable` (dot path) → static `assignees`. No HTTP resolver in engine.
+
 ### Optimistic locking
 
 Instances carry `lock_version`. Clients may pass `lockVersion` when completing a UserTask:
 
 ```json
-{ "variables": { "approved": true }, "lockVersion": 3 }
+{ "assignee": "u1", "action": "approve", "comment": "ok", "lockVersion": 3 }
 ```
 
 ## Package layout
 
 ```
-cmd/server/                 HTTP entrypoint + worker startup
-internal/api/               Chi routes, Prometheus metrics, error responses
-internal/bpmn/              Model, validation, registry, expressions
-internal/engine/            Engine, worker, Store interface
-internal/script/            Runner interface (goja JS + set DSL)
-internal/store/postgres/    Postgres store + embedded migrations
-internal/store/memory/      In-memory store (unit tests)
+cmd/server/                 HTTP entrypoint + worker + plugin consumers
+internal/api/               Chi routes, metrics, OTel middleware
+internal/bpmn/              Model, validation, expressions, approval
+internal/engine/            Engine, worker, Store interface, trigger/reject
+internal/event/             Stream model, memory/redis consumers
+internal/plugin/            Host SDK, runtime, bootstrap (no vendor code)
+internal/script/            Runner (goja JS + set DSL)
+internal/store/             Backend factory (db / file / memory)
+internal/store/gormstore/   GORM persistence + AutoMigrate
+internal/store/filestore/   YAML file persistence
+internal/store/memory/      In-memory store (tests)
+internal/telemetry/         Logging + OpenTelemetry
+plugins/sdk/                Action + Apply* for Go plugins
+plugins/registry/           Name → adapter lookup
+plugins/go/                 feishu, wecom, airtable, generic, canonical
+plugins/wasm/               WASM sandbox plugins
+schemas/                    JSON Schema for definitions and adapter actions
 ```
+
+**Boundary rule:** `internal/` holds engine core only; vendor-specific mapping lives under `plugins/`.
 
 ## Design strengths
 
 | Area | Notes |
 |------|-------|
 | **Single engine** | One BPMN mental model; no legacy orchestration paths |
-| **Minimal dependencies** | chi, uuid, pgx, goja, prometheus client |
+| **Pluggable ingress** | Triple streams + Go/WASM adapters without engine forks |
+| **Capability sandbox** | WASM host imports gated by manifest (Paca-style) |
+| **Multi-store** | Postgres / MySQL / SQLite / file / memory via one interface |
 | **JSON-first** | Designer-friendly; no XML BPMN required |
-| **Testability** | `memory.Store` implements full `engine.Store` |
+| **Rich userTask** | 或签/会签/顺序签, reject return, scope terminate |
 | **Versioning** | Deploy increments version; instances pin snapshots |
 | **Async option** | Job table + worker for non-blocking start/continue |
-| **Inbox API** | Query active UserTasks by tenant and assignee |
-| **Observability** | Prometheus counters/histograms on `/metrics` |
+| **Observability** | Prometheus `/metrics`; optional OTLP traces |
 | **Transactions** | Multi-step engine writes wrapped in `WithTx` |
 
 ## Known limitations
 
 | Item | Status |
 |------|--------|
-| Authentication / authorization | Not implemented |
-| Subprocesses / boundary events | Not supported |
-| Script sandbox | goja with basic isolation; harden for untrusted scripts in production |
-| Distributed worker | Single-process polling; `SKIP LOCKED` supports replicas but not load-tested |
-| Business-key deduplication | No guard against duplicate starts for the same `businessKey` |
-| OpenTelemetry tracing | Metrics only; no distributed traces yet |
+| Authentication / authorization | Not implemented — terminate at API gateway or add middleware |
+| Boundary events / call activity | Not supported |
+| Timer start | Metadata only; external scheduler required |
+| Script sandbox | goja with basic isolation; harden for untrusted scripts |
+| Event consumer | In-memory default is single-process; use Redis for replicas |
+| Business-key deduplication | No guard against duplicate starts for same `businessKey` |
+| WASM host I/O | Fixed output buffers for some read APIs; size limits TBD |
+| GORM AutoMigrate | No versioned SQL migrations; schema evolves with models |
+
+## Recommendations
+
+Production and evolution priorities, ordered by impact:
+
+1. **Auth at the edge** — API keys or JWT in reverse proxy / middleware before exposing `/events/*` and `/process-instances/*`.
+2. **Redis event transport** — set `EVENT_CONSUMER=redis` when running multiple API replicas so webhook ingress and consumers stay consistent.
+3. **Idempotent message start** — dedupe by `(tenantId, messageRef, businessKey)` or correlation key to avoid double-starts from webhook retries.
+4. **Enable OTEL in prod** — `OTEL_ENABLED=true` with a collector; HTTP middleware is already wired.
+5. **Split hot plugins** — move high-churn adapters (`plugins/go/feishu`, etc.) to separate Go modules for independent release cycles.
+6. **Versioned DB migrations** — replace or supplement AutoMigrate with explicit migration files before multi-tenant production.
+7. **Plugin contract tests** — golden-file tests per adapter against `schemas/adapter-action.schema.json` and sample vendor payloads.
+8. **Control stream (future)** — today `terminate` shares the task stream; a dedicated control consumer would isolate admin/cancel traffic.
 
 ## Future enhancements
 
-- JWT or API-key authentication
-- OpenTelemetry tracing alongside existing Prometheus metrics
-- Idempotent start by `businessKey`
-- Webhooks or SSE for task created / process completed events
-- Stronger script sandbox (resource limits, network deny)
+- Built-in auth middleware (tenant-scoped API keys)
+- Idempotent start by `businessKey` / correlation key
+- Webhooks or SSE for task created / process completed
+- Stronger script + WASM sandbox (memory limits, no network)
+- Kafka/NATS `event.Consumer` implementation
+- Explicit SQL migrations alongside GORM models
 
 ## Maturity summary
 
 | Dimension | Assessment |
 |-----------|------------|
-| **Purpose** | Clear, embeddable BPMN microservice for low-code platforms |
-| **Code quality** | Focused layout; core paths covered by unit tests |
-| **Production readiness** | Beta — add auth and hardened script execution before untrusted multi-tenant use |
-| **Highlights** | Version pinning, async worker, task inbox, optimistic locking, metrics |
+| **Purpose** | Clear, embeddable BPMN microservice for low-code / IM-integrated platforms |
+| **Code quality** | Focused layout; engine + plugin paths covered by unit tests |
+| **Production readiness** | Beta — add auth, Redis events for HA, and migration strategy before untrusted multi-tenant use |
+| **Highlights** | Version pinning, triple plugin streams, approval modes, async worker, multi-store, metrics + optional traces |

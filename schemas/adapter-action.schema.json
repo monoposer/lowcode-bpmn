@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lowcode-bpmn.dev/schemas/adapter-action.schema.json",
+  "title": "CanonicalAction",
+  "description": "Normalized intent produced by event adapters before calling Host SDK.",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "trigger_message",
+        "start_process",
+        "remove_user",
+        "replace_assignees",
+        "complete_task",
+        "terminate"
+      ]
+    },
+    "tenant_id": { "type": "string" },
+    "process_key": { "type": "string" },
+    "message_ref": { "type": "string" },
+    "business_key": { "type": "string" },
+    "user_id": { "type": "string" },
+    "reason": { "type": "string" },
+    "operator": { "type": "string" },
+    "assignees": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "process_instance_id": { "type": "string", "format": "uuid" },
+    "activity_id": { "type": "string", "format": "uuid" },
+    "assignee": { "type": "string" },
+    "action": {
+      "type": "string",
+      "enum": ["approve", "reject"],
+      "description": "Approval outcome for complete_task"
+    },
+    "comment": { "type": "string" },
+    "lock_version": { "type": "integer" },
+    "scope_id": { "type": "string" },
+    "variables": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "trigger_message" } } },
+      "then": { "required": ["message_ref"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "start_process" } } },
+      "then": { "required": ["process_key"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "remove_user" } } },
+      "then": { "required": ["user_id"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "complete_task" } } },
+      "then": { "required": ["process_instance_id", "activity_id", "assignee"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "terminate" } } },
+      "then": { "required": ["process_instance_id"] }
+    }
+  ]
+}

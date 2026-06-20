@@ -1,0 +1,30 @@
+---
+description: Go engine, store, and API conventions
+globs: "{cmd,internal}/**/*.go"
+alwaysApply: false
+---
+
+# Go conventions
+
+## Engine & store
+
+- Business logic lives in `internal/engine`; HTTP stays thin in `internal/api`
+- Pass `context.Context` through; use `Store.WithTx` for atomic multi-write paths
+- `CompleteTask` checks activity is active `userTask`; does not validate assignee identity
+
+## Adding persistence
+
+1. Extend `engine.Store` in `internal/engine/store.go`
+2. Implement in `internal/store/memory/store.go` (tests)
+3. Implement in `internal/store/gormstore/store.go`
+4. Implement in `internal/store/filestore/store.go` (delegates to memory + YAML persist)
+
+## Tests
+
+- Engine tests: `memstore.NewStore()` + `engine.NewEngine(store, nil)`
+- Table-driven tests preferred; run `go test ./internal/engine/... ./internal/bpmn/...`
+
+## Scripts
+
+- `internal/script`: `set:k=v` DSL always available; JS via goja when `scriptLang: "javascript"`
+- Do not expose unrestricted network/file access in scripts without explicit security review

@@ -216,12 +216,19 @@ func (s *Store) UpdateActivityInstance(ctx context.Context, act *engine.Activity
 		return err
 	}
 	return s.conn(ctx).Model(&BpmnActivity{}).Where("id = ?", act.ID).Updates(map[string]any{
-		"status":        row.Status,
-		"assignees":     row.Assignees,
-		"input":         row.Input,
-		"output":        row.Output,
-		"error_message": row.ErrorMessage,
-		"ended_at":      row.EndedAt,
+		"status":            row.Status,
+		"scope_id":          row.ScopeID,
+		"branch_flow_id":    row.BranchFlowID,
+		"outcome":           row.Outcome,
+		"assignees":         row.Assignees,
+		"approval_mode":      row.ApprovalMode,
+		"required_approvals": row.RequiredApprovals,
+		"pending_assignees": row.PendingAssignees,
+		"approval_records":  row.ApprovalRecords,
+		"input":             row.Input,
+		"output":            row.Output,
+		"error_message":     row.ErrorMessage,
+		"ended_at":          row.EndedAt,
 	}).Error
 }
 
@@ -285,7 +292,9 @@ func (s *Store) ListActiveUserTasks(ctx context.Context, tenantID, assignee stri
 	var rows []userTaskRow
 	err := s.conn(ctx).
 		Table("bpmn_activities a").
-		Select(`a.id, a.process_instance_id, a.element_id, a.element_kind, a.status, a.assignees, a.input, a.output, a.error_message, a.started_at, a.ended_at,
+		Select(`a.id, a.process_instance_id, a.element_id, a.element_kind, a.status,
+		        a.assignees, a.approval_mode, a.required_approvals, a.pending_assignees, a.approval_records,
+		        a.input, a.output, a.error_message, a.started_at, a.ended_at,
 		        i.tenant_id, i.process_key, i.business_key, i.process_version`).
 		Joins("JOIN bpmn_instances i ON i.id = a.process_instance_id").
 		Where("i.tenant_id = ? AND a.status = ? AND a.element_kind = ?",
@@ -302,7 +311,7 @@ func (s *Store) ListActiveUserTasks(ctx context.Context, tenantID, assignee stri
 		if err != nil {
 			return nil, err
 		}
-		if assignee != "" && !containsAssignee(act.Assignees, assignee) {
+		if assignee != "" && !engine.TaskVisibleToAssignee(act, assignee) {
 			continue
 		}
 		res = append(res, &engine.UserTask{

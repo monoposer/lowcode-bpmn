@@ -258,7 +258,7 @@ func (s *Store) ListActiveUserTasks(ctx context.Context, tenantID, assignee stri
 		if !ok || inst.TenantID != tenantID {
 			continue
 		}
-		if assignee != "" && !containsAssignee(act.Assignees, assignee) {
+		if assignee != "" && !engine.TaskVisibleToAssignee(act, assignee) {
 			continue
 		}
 		res = append(res, &engine.UserTask{

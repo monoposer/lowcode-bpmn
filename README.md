@@ -4,7 +4,7 @@ Lightweight **BPMN 2.0** workflow engine in Go. Reference design: [tumbleweed](h
 
 ## Architecture
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md).
+See [ARCHITECTURE.md](./ARCHITECTURE.md). Cursor / AI agents: see [AGENTS.md](./AGENTS.md).
 
 ## Getting Started
 

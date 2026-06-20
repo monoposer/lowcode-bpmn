@@ -71,10 +71,11 @@ func (e *Engine) ListProcesses(ctx context.Context, tenantID string) ([]*Deploye
 }
 
 type StartProcessRequest struct {
-	TenantID    string
-	ProcessKey  string
-	BusinessKey string
-	Variables   map[string]any
+	TenantID          string
+	ProcessKey        string
+	BusinessKey       string
+	Variables         map[string]any
+	StartElementIDs   []string // optional: activate only these startEvents (message/signal trigger)
 }
 
 func (e *Engine) StartProcess(ctx context.Context, req StartProcessRequest) (*ProcessInstance, error) {
@@ -92,6 +93,9 @@ func (e *Engine) StartProcess(ctx context.Context, req StartProcessRequest) (*Pr
 	if e.async {
 		inst := e.newInstance(dp, req.BusinessKey, req.Variables)
 		inst.Status = ProcessStatusPending
+		if len(req.StartElementIDs) > 0 {
+			inst.InternalState["start_element_ids"] = req.StartElementIDs
+		}
 		err = e.store.WithTx(ctx, func(tx Store) error {
 			if err := tx.CreateProcessInstance(ctx, inst); err != nil {
 				return err
@@ -111,7 +115,7 @@ func (e *Engine) StartProcess(ctx context.Context, req StartProcessRequest) (*Pr
 	err = e.store.WithTx(ctx, func(tx Store) error {
 		runner := &Engine{store: tx, script: e.script, async: false}
 		var runErr error
-		inst, runErr = runner.startWithDefinition(ctx, dp, req.BusinessKey, req.Variables)
+		inst, runErr = runner.startWithDefinition(ctx, dp, req.BusinessKey, req.Variables, req.StartElementIDs)
 		return runErr
 	})
 	if err != nil {
@@ -122,7 +126,7 @@ func (e *Engine) StartProcess(ctx context.Context, req StartProcessRequest) (*Pr
 
 func (e *Engine) StartProcessWithDefinition(ctx context.Context, tenantID, key, businessKey string, def bpmn.ProcessDefinition, vars map[string]any) (*ProcessInstance, error) {
 	dp := &DeployedProcess{TenantID: tenantID, Key: key, Version: 1, Definition: def}
-	return e.startWithDefinition(ctx, dp, businessKey, vars)
+	return e.startWithDefinition(ctx, dp, businessKey, vars, nil)
 }
 
 func (e *Engine) GetProcessInstance(ctx context.Context, id uuid.UUID) (*ProcessInstance, error) {
@@ -192,7 +196,7 @@ func (e *Engine) newInstance(dp *DeployedProcess, businessKey string, vars map[s
 	}
 }
 
-func (e *Engine) startWithDefinition(ctx context.Context, dp *DeployedProcess, businessKey string, vars map[string]any) (*ProcessInstance, error) {
+func (e *Engine) startWithDefinition(ctx context.Context, dp *DeployedProcess, businessKey string, vars map[string]any, startElementIDs []string) (*ProcessInstance, error) {
 	reg, err := bpmn.BuildRegistry(dp.Definition)
 	if err != nil {
 		return nil, err
@@ -202,9 +206,14 @@ func (e *Engine) startWithDefinition(ctx context.Context, dp *DeployedProcess, b
 		return nil, err
 	}
 
+	startIDs := startElementIDs
+	if len(startIDs) == 0 {
+		startIDs = reg.StartEvents
+	}
+
 	state := &execState{inst: inst, reg: reg}
-	for _, startID := range reg.StartEvents {
-		if err := e.activateElement(ctx, state, startID); err != nil {
+	for _, startID := range startIDs {
+		if err := e.activateElement(ctx, state, startID, ""); err != nil {
 			return e.failInstance(ctx, inst, err)
 		}
 	}
@@ -225,8 +234,24 @@ func (e *Engine) runStartJob(ctx context.Context, instanceID uuid.UUID) error {
 		return err
 	}
 	state := &execState{inst: inst, reg: reg}
-	for _, startID := range reg.StartEvents {
-		if err := e.activateElement(ctx, state, startID); err != nil {
+	startIDs := reg.StartEvents
+	if raw, ok := inst.InternalState["start_element_ids"]; ok {
+		if ids, ok := raw.([]string); ok && len(ids) > 0 {
+			startIDs = ids
+		} else if arr, ok := raw.([]any); ok && len(arr) > 0 {
+			ids := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if s, ok := item.(string); ok && s != "" {
+					ids = append(ids, s)
+				}
+			}
+			if len(ids) > 0 {
+				startIDs = ids
+			}
+		}
+	}
+	for _, startID := range startIDs {
+		if err := e.activateElement(ctx, state, startID, ""); err != nil {
 			_, failErr := e.failInstance(ctx, inst, err)
 			return failErr
 		}
@@ -286,17 +311,59 @@ func (e *Engine) CompleteTask(ctx context.Context, req CompleteTaskRequest) (*Pr
 		return nil, fmt.Errorf("element is not a userTask: %s", act.ElementKind)
 	}
 
+	reg, err := registryForInstance(inst)
+	if err != nil {
+		return nil, err
+	}
+	el, ok := reg.Element(act.ElementID)
+	if !ok {
+		return nil, fmt.Errorf("element not found: %s", act.ElementID)
+	}
+
+	step, err := applyApprovalStep(act, el, req)
+	if err != nil {
+		return nil, err
+	}
 	for k, v := range req.Variables {
 		inst.Variables[k] = v
 	}
 	if inst.InternalState == nil {
 		inst.InternalState = make(map[string]any)
 	}
+	act.Output = mergeApprovalOutput(act)
+
+	if !step.done {
+		inst.UpdatedAt = time.Now().UTC()
+		err = e.store.WithTx(ctx, func(tx Store) error {
+			if err := tx.UpdateActivityInstance(ctx, act); err != nil {
+				return err
+			}
+			return tx.UpdateProcessInstance(ctx, inst)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return e.store.GetProcessInstance(ctx, inst.ID)
+	}
+
+	if step.rejected {
+		act.Output = mergeApprovalOutput(act)
+		state := &execState{inst: inst, reg: reg}
+		err = e.store.WithTx(ctx, func(tx Store) error {
+			runner := &Engine{store: tx, script: e.script, async: false}
+			return runner.handleTaskReject(ctx, state, act, el, req)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return e.store.GetProcessInstance(ctx, inst.ID)
+	}
 
 	now := time.Now().UTC()
 	act.Status = ActivityStatusCompleted
+	act.Outcome = OutcomeApprove
 	act.EndedAt = &now
-	act.Output = cloneVars(req.Variables)
+	act.PendingAssignees = nil
 	elementID := act.ElementID
 
 	if e.async {
@@ -318,11 +385,6 @@ func (e *Engine) CompleteTask(ctx context.Context, req CompleteTaskRequest) (*Pr
 			return nil, err
 		}
 		return e.store.GetProcessInstance(ctx, inst.ID)
-	}
-
-	reg, err := registryForInstance(inst)
-	if err != nil {
-		return nil, err
 	}
 
 	var result *ProcessInstance
@@ -354,14 +416,25 @@ func registryForInstance(inst *ProcessInstance) (*bpmn.Registry, error) {
 }
 
 type execState struct {
-	inst *ProcessInstance
-	reg  *bpmn.Registry
+	inst         *ProcessInstance
+	reg          *bpmn.Registry
+	scopeID      string
+	branchFlowID string
 }
 
-func (e *Engine) activateElement(ctx context.Context, state *execState, elementID string) error {
+func (e *Engine) activateElement(ctx context.Context, state *execState, elementID, branchFlowID string) error {
 	el, ok := state.reg.Element(elementID)
 	if !ok {
 		return fmt.Errorf("element not found: %s", elementID)
+	}
+
+	scopeID := scopeForElement(state, el)
+	if el.Kind == bpmn.KindSubProcess {
+		state.scopeID = scopeID
+		if el.EntryRef != "" {
+			return e.activateElement(ctx, state, el.EntryRef, branchFlowID)
+		}
+		return nil
 	}
 
 	now := time.Now().UTC()
@@ -371,6 +444,8 @@ func (e *Engine) activateElement(ctx context.Context, state *execState, elementI
 		ElementID:         elementID,
 		ElementKind:       el.Kind,
 		Status:            ActivityStatusActive,
+		ScopeID:           scopeID,
+		BranchFlowID:      branchFlowID,
 		Assignees:         el.Assignees,
 		Input:             cloneVars(state.inst.Variables),
 		StartedAt:         now,
@@ -434,6 +509,11 @@ func (e *Engine) activateElement(ctx context.Context, state *execState, elementI
 			}
 			return e.completeElement(ctx, state, elementID)
 		}
+		initUserTaskApproval(act, el, resolvedAssignees(state, elementID, el))
+		stampAssigneeSyncMeta(act, resolvedAssigneeSource(state, elementID, el), "")
+		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
+			return err
+		}
 		state.inst.ActiveElements = appendUnique(state.inst.ActiveElements, elementID)
 		state.inst.UpdatedAt = time.Now().UTC()
 		return e.store.UpdateProcessInstance(ctx, state.inst)
@@ -486,11 +566,15 @@ func (e *Engine) completeElement(ctx context.Context, state *execState, elementI
 		if len(outgoing) > 1 {
 			return fmt.Errorf("element %s has multiple outgoing flows but is not a gateway", elementID)
 		}
-		return e.activateViaFlow(ctx, state, outgoing[0])
+		return e.activateViaFlow(ctx, state, outgoing[0], state.branchFlowID)
 	}
 }
 
-func (e *Engine) activateViaFlow(ctx context.Context, state *execState, flow bpmn.SequenceFlow) error {
+func (e *Engine) activateViaFlow(ctx context.Context, state *execState, flow bpmn.SequenceFlow, branchFlowID string) error {
+	srcEl, srcOK := state.reg.Element(flow.SourceRef)
+	if srcOK && srcEl.Kind == bpmn.KindParallelGateway && len(state.reg.OutgoingFlows(flow.SourceRef)) > 1 {
+		branchFlowID = flow.ID
+	}
 	targetID := flow.TargetRef
 	if state.reg.IsJoinGateway(targetID) {
 		incoming := state.reg.IncomingFlows(targetID)
@@ -509,7 +593,7 @@ func (e *Engine) activateViaFlow(ctx context.Context, state *execState, flow bpm
 			delete(state.inst.InternalState, key)
 		}
 	}
-	return e.activateElement(ctx, state, targetID)
+	return e.activateElement(ctx, state, targetID, branchFlowID)
 }
 
 func (e *Engine) followExclusive(ctx context.Context, state *execState, flows []bpmn.SequenceFlow) error {
@@ -529,11 +613,11 @@ func (e *Engine) followExclusive(ctx context.Context, state *execState, flows []
 			return err
 		}
 		if ok {
-			return e.activateViaFlow(ctx, state, *f)
+			return e.activateViaFlow(ctx, state, *f, state.branchFlowID)
 		}
 	}
 	if defaultFlow != nil {
-		return e.activateViaFlow(ctx, state, *defaultFlow)
+		return e.activateViaFlow(ctx, state, *defaultFlow, state.branchFlowID)
 	}
 	return errors.New("exclusive gateway: no matching outgoing flow")
 }
@@ -556,12 +640,12 @@ func (e *Engine) followInclusive(ctx context.Context, state *execState, flows []
 	}
 	if len(matched) == 0 {
 		if defaultFlow != nil {
-			return e.activateViaFlow(ctx, state, *defaultFlow)
+			return e.activateViaFlow(ctx, state, *defaultFlow, state.branchFlowID)
 		}
 		return errors.New("inclusive gateway: no matching outgoing flow")
 	}
 	for _, f := range matched {
-		if err := e.activateViaFlow(ctx, state, f); err != nil {
+		if err := e.activateViaFlow(ctx, state, f, state.branchFlowID); err != nil {
 			return err
 		}
 	}
@@ -570,7 +654,7 @@ func (e *Engine) followInclusive(ctx context.Context, state *execState, flows []
 
 func (e *Engine) followAll(ctx context.Context, state *execState, flows []bpmn.SequenceFlow) error {
 	for _, f := range flows {
-		if err := e.activateViaFlow(ctx, state, f); err != nil {
+		if err := e.activateViaFlow(ctx, state, f, state.branchFlowID); err != nil {
 			return err
 		}
 	}

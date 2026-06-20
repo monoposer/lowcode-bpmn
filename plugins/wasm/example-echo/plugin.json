@@ -1,0 +1,7 @@
+{
+  "name": "example-echo",
+  "stream": "trigger",
+  "sources": ["custom"],
+  "capabilities": ["trigger_message"],
+  "wasm": "plugin.wasm"
+}

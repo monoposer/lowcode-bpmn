@@ -42,3 +42,42 @@ func TestEvalCondition(t *testing.T) {
 		t.Fatalf("expected status match")
 	}
 }
+
+func TestEvalCondition_nestedPath(t *testing.T) {
+	vars := map[string]any{
+		"amount": 500,
+		"item": map[string]any{
+			"kk": 11,
+			"name": "widget",
+		},
+	}
+
+	ok, err := EvalCondition("item.kk >= 10", vars)
+	if err != nil || !ok {
+		t.Fatalf("expected item.kk >= 10 true, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.kk >= 20", vars)
+	if err != nil || ok {
+		t.Fatalf("expected item.kk >= 20 false, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.kk == 11", vars)
+	if err != nil || !ok {
+		t.Fatalf("expected item.kk == 11 true, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.name == widget", vars)
+	if err != nil || !ok {
+		t.Fatalf("expected item.name match, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.missing == x", vars)
+	if err != nil || ok {
+		t.Fatalf("expected missing path false, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.missing != x", vars)
+	if err != nil || !ok {
+		t.Fatalf("expected missing path != true, got %v err=%v", ok, err)
+	}
+	ok, err = EvalCondition("item.kk", vars)
+	if err != nil || !ok {
+		t.Fatalf("expected item.kk truthy, got %v err=%v", ok, err)
+	}
+}

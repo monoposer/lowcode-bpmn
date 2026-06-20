@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/monoposer/lowcode-bpmn/schemas/trigger-message.schema.json",
+  "title": "Trigger Message Start Event",
+  "description": "Canonical inbound event for BPMN message start events. Upper adapters (Airtable webhook, Feishu, etc.) normalize external payloads and POST here.",
+  "type": "object",
+  "required": ["tenantId", "messageRef"],
+  "additionalProperties": false,
+  "properties": {
+    "tenantId": { "type": "string", "minLength": 1 },
+    "messageRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Must match startEvent.eventDefinition.messageRef on deployed processes"
+    },
+    "businessKey": {
+      "type": "string",
+      "description": "Optional idempotency key; if omitted, derived from eventDefinition.correlationKey on the start event"
+    },
+    "variables": {
+      "type": "object",
+      "description": "Trigger payload stored as process instance variables; used to evaluate eventDefinition.condition",
+      "additionalProperties": true
+    }
+  },
+  "examples": [
+    {
+      "tenantId": "demo",
+      "messageRef": "airtable.orders.updated",
+      "variables": {
+        "event": {
+          "action": "update",
+          "recordId": "recABC123",
+          "table": "Orders",
+          "fields": {
+            "status": "Pending",
+            "amount": 1200
+          }
+        }
+      }
+    }
+  ]
+}

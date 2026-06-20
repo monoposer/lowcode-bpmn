@@ -139,6 +139,9 @@ func activityFromModel(m *BpmnActivity) (*engine.ActivityInstance, error) {
 		ElementID:         m.ElementID,
 		ElementKind:       bpmn.ElementKind(m.ElementKind),
 		Status:            engine.ActivityStatus(m.Status),
+		ScopeID:           m.ScopeID,
+		BranchFlowID:      m.BranchFlowID,
+		Outcome:           m.Outcome,
 		ErrorMsg:          m.ErrorMessage,
 		StartedAt:         m.StartedAt,
 		EndedAt:           m.EndedAt,
@@ -152,6 +155,14 @@ func activityFromModel(m *BpmnActivity) (*engine.ActivityInstance, error) {
 	if err := fromJSON(m.Output, &act.Output); err != nil {
 		return nil, err
 	}
+	if err := fromJSON(m.PendingAssignees, &act.PendingAssignees); err != nil {
+		return nil, err
+	}
+	if err := fromJSON(m.ApprovalRecords, &act.ApprovalRecords); err != nil {
+		return nil, err
+	}
+	act.ApprovalMode = m.ApprovalMode
+	act.RequiredApprovals = m.RequiredApprovals
 	return act, nil
 }
 
@@ -168,13 +179,28 @@ func activityToModel(act *engine.ActivityInstance) (*BpmnActivity, error) {
 	if err != nil {
 		return nil, err
 	}
+	pendingJSON, err := toJSON(act.PendingAssignees)
+	if err != nil {
+		return nil, err
+	}
+	recordsJSON, err := toJSON(act.ApprovalRecords)
+	if err != nil {
+		return nil, err
+	}
 	return &BpmnActivity{
 		ID:                act.ID,
 		ProcessInstanceID: act.ProcessInstanceID,
 		ElementID:         act.ElementID,
 		ElementKind:       string(act.ElementKind),
 		Status:            string(act.Status),
+		ScopeID:           act.ScopeID,
+		BranchFlowID:      act.BranchFlowID,
+		Outcome:           act.Outcome,
 		Assignees:         assignJSON,
+		ApprovalMode:      act.ApprovalMode,
+		RequiredApprovals: act.RequiredApprovals,
+		PendingAssignees:  pendingJSON,
+		ApprovalRecords:   recordsJSON,
 		Input:             inJSON,
 		Output:            outJSON,
 		ErrorMessage:      act.ErrorMsg,

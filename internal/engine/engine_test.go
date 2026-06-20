@@ -128,6 +128,43 @@ func TestExclusiveGateway(t *testing.T) {
 	}
 }
 
+func TestExclusiveGateway_nestedCondition(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	eng := engine.NewEngine(store, nil)
+
+	def := bpmn.ProcessDefinition{
+		ID: "branch-nested",
+		Elements: []bpmn.Element{
+			{ID: "start", Kind: bpmn.KindStartEvent},
+			{ID: "gw", Kind: bpmn.KindExclusiveGateway},
+			{ID: "high", Kind: bpmn.KindScriptTask, Script: "set:path=high"},
+			{ID: "low", Kind: bpmn.KindScriptTask, Script: "set:path=low"},
+			{ID: "end", Kind: bpmn.KindEndEvent},
+		},
+		Flows: []bpmn.SequenceFlow{
+			{ID: "f1", SourceRef: "start", TargetRef: "gw"},
+			{ID: "f2", SourceRef: "gw", TargetRef: "high", Condition: "item.kk >= 10"},
+			{ID: "f3", SourceRef: "gw", TargetRef: "low", IsDefault: true},
+			{ID: "f4", SourceRef: "high", TargetRef: "end"},
+			{ID: "f5", SourceRef: "low", TargetRef: "end"},
+		},
+	}
+	_ = store.InsertProcessVersion(ctx, &engine.DeployedProcess{TenantID: "t", Key: "branch-nested", Definition: def})
+
+	inst, err := eng.StartProcess(ctx, engine.StartProcessRequest{
+		TenantID: "t", ProcessKey: "branch-nested", Variables: map[string]any{
+			"item": map[string]any{"kk": 11},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Variables["path"] != "high" {
+		t.Fatalf("expected high path via item.kk, got %v", inst.Variables["path"])
+	}
+}
+
 func TestParallelGateway(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()

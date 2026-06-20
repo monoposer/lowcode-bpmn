@@ -1,0 +1,30 @@
+---
+description: lowcode-bpmn core context for all agent sessions
+alwaysApply: true
+---
+
+# lowcode-bpmn
+
+Go BPMN 2.0 engine microservice. JSON process definitions; no XML, no legacy stage orchestrator.
+
+## Packages
+
+- `internal/engine` — execution; `engine.Store` is the persistence boundary
+- `internal/bpmn` — model, validation, conditions (incl. dot paths like `item.kk >= 10`)
+- `internal/api` — Chi HTTP; errors `{ error, code }`
+- `internal/store/open.go` — `STORE_BACKEND`: `db` | `file` | `memory`
+
+## Invariants
+
+- `userTask`: multi-sign modes `any|all|sequential` (或签/会签/顺签); complete requires `assignee` when multiple assignees
+- Deploy bumps version; instances pin snapshot at start
+- New store methods → implement in `memory`, `gormstore`, `filestore`
+
+## Commands
+
+```bash
+go test ./...
+go run ./cmd/server
+```
+
+See `AGENTS.md` and `ARCHITECTURE.md` for API and layout details.

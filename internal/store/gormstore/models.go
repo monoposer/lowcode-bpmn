@@ -45,7 +45,14 @@ type BpmnActivity struct {
 	ElementID         string         `gorm:"not null"`
 	ElementKind       string         `gorm:"not null"`
 	Status            string         `gorm:"not null"`
+	ScopeID           string         `gorm:"column:scope_id"`
+	BranchFlowID      string         `gorm:"column:branch_flow_id"`
+	Outcome           string         `gorm:"column:outcome"`
 	Assignees         datatypes.JSON
+	ApprovalMode      string         `gorm:"column:approval_mode"`
+	RequiredApprovals int            `gorm:"column:required_approvals"`
+	PendingAssignees  datatypes.JSON `gorm:"column:pending_assignees"`
+	ApprovalRecords   datatypes.JSON `gorm:"column:approval_records"`
 	Input             datatypes.JSON
 	Output            datatypes.JSON
 	ErrorMessage      string         `gorm:"column:error_message"`

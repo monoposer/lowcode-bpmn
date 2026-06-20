@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/monoposer/lowcode-bpmn/schemas/process-definition.schema.json",
+  "title": "BPMN Process Definition (JSON)",
+  "description": "Deployable BPMN 2.0 process in JSON form. Sequence flow conditions apply at gateways only; startEvent triggers use eventDefinition (message/signal/timer/conditional).",
+  "type": "object",
+  "required": ["id", "elements", "flows"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Process identifier (often same as deploy key)"
+    },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "elements": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/element" }
+    },
+    "flows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sequenceFlow" }
+    }
+  },
+  "$defs": {
+    "elementKind": {
+      "type": "string",
+      "enum": [
+        "startEvent",
+        "endEvent",
+        "userTask",
+        "scriptTask",
+        "exclusiveGateway",
+        "parallelGateway",
+        "inclusiveGateway",
+        "subProcess"
+      ]
+    },
+    "eventDefinitionType": {
+      "type": "string",
+      "enum": ["none", "message", "signal", "timer", "conditional"],
+      "description": "BPMN 2.0 start event definition type"
+    },
+    "eventDefinition": {
+      "type": "object",
+      "description": "BPMN 2.0 eventDefinition on startEvent — NOT a sequenceFlow condition",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/eventDefinitionType" },
+        "messageRef": {
+          "type": "string",
+          "description": "messageEventDefinition — canonical message name (e.g. airtable.orders.updated)"
+        },
+        "signalRef": {
+          "type": "string",
+          "description": "signalEventDefinition — broadcast signal name"
+        },
+        "correlationKey": {
+          "type": "string",
+          "description": "Dot path in trigger variables mapped to process instance businessKey"
+        },
+        "condition": {
+          "type": "string",
+          "description": "conditionalEventDefinition — expression evaluated against trigger payload before start"
+        },
+        "timerCycle": {
+          "type": "string",
+          "description": "timerEventDefinition — ISO-8601 repeat or cron; external scheduler invokes start/trigger"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "message" } },
+            "required": ["type"]
+          },
+          "then": { "required": ["messageRef"] }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "signal" } },
+            "required": ["type"]
+          },
+          "then": { "required": ["signalRef"] }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "timer" } },
+            "required": ["type"]
+          },
+          "then": { "required": ["timerCycle"] }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "conditional" } },
+            "required": ["type"]
+          },
+          "then": { "required": ["condition"] }
+        }
+      ]
+    },
+    "element": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/elementKind" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "assignees": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "assigneesVariable": {
+          "type": "string",
+          "description": "Dot path in instance variables; overrides assignees at userTask activation"
+        },
+        "approvalMode": {
+          "type": "string",
+          "enum": ["any", "all", "sequential", "或签", "会签", "顺签"]
+        },
+        "requiredApprovals": { "type": "integer", "minimum": 1 },
+        "returnTo": { "type": "string" },
+        "onReject": { "type": "string", "enum": ["return", "terminateScope"] },
+        "scopeId": { "type": "string" },
+        "entryRef": { "type": "string" },
+        "exitRef": { "type": "string" },
+        "script": { "type": "string" },
+        "scriptLang": { "type": "string" },
+        "autoComplete": { "type": "boolean" },
+        "eventDefinition": { "$ref": "#/$defs/eventDefinition" },
+        "properties": { "type": "object" }
+      }
+    },
+    "sequenceFlow": {
+      "type": "object",
+      "required": ["id", "sourceRef", "targetRef"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sourceRef": { "type": "string" },
+        "targetRef": { "type": "string" },
+        "name": { "type": "string" },
+        "condition": {
+          "type": "string",
+          "description": "Evaluated when leaving a gateway (exclusive/inclusive); ignored on linear edges"
+        },
+        "isDefault": { "type": "boolean" }
+      }
+    }
+  }
+}

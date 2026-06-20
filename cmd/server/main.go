@@ -12,6 +12,8 @@ import (
 
 	"github.com/monoposer/lowcode-bpmn/internal/api"
 	"github.com/monoposer/lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/event"
+	"github.com/monoposer/lowcode-bpmn/internal/plugin"
 	"github.com/monoposer/lowcode-bpmn/internal/store"
 	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 )
@@ -57,25 +59,40 @@ func main() {
 		slog.Info("async execution enabled")
 	}
 
+	pluginCfg := plugin.LoadConfigFromEnv()
+	pluginBoot, err := plugin.BootstrapFromEngine(ctx, eng, pluginCfg)
+	if err != nil {
+		slog.Error("plugin bootstrap failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pluginBoot.Close(ctx)
+
+	consumerCtx, consumerCancel := context.WithCancel(ctx)
+	defer consumerCancel()
+	startStreamConsumer(consumerCtx, pluginBoot.AssigneeConsumer, pluginBoot.AssigneeRuntime)
+	startStreamConsumer(consumerCtx, pluginBoot.TriggerConsumer, pluginBoot.TriggerRuntime)
+	startStreamConsumer(consumerCtx, pluginBoot.TaskConsumer, pluginBoot.TaskRuntime)
+
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 	worker := engine.NewWorker(eng, getEnvDuration("WORKER_INTERVAL", 500*time.Millisecond))
 	go worker.Run(workerCtx)
 
-	deps := api.RouterDeps{Engine: eng}
+	deps := api.RouterDeps{
+		Engine: eng,
+		Events: pluginBoot.Publisher(),
+	}
 	router := api.NewHTTPRouter(deps)
 	router = withEngineMiddleware(router, deps)
 	handler := withCORS(router)
 
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
+	srv := &http.Server{Addr: addr, Handler: handler}
 
 	go func() {
 		slog.Info("server listening",
 			slog.String("addr", addr),
 			slog.String("store", store.Describe(storeCfg)),
+			slog.String("event_consumer", pluginCfg.ConsumerKind),
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("listen failed", slog.String("error", err.Error()))
@@ -88,6 +105,7 @@ func main() {
 	<-stop
 
 	workerCancel()
+	consumerCancel()
 	shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -95,6 +113,24 @@ func main() {
 	if err := srv.Shutdown(shCtx); err != nil {
 		slog.Error("server shutdown error", slog.String("error", err.Error()))
 	}
+}
+
+func startStreamConsumer(ctx context.Context, cons event.Consumer, rt *plugin.Runtime) {
+	if cons == nil || rt == nil {
+		return
+	}
+	go func() {
+		slog.Info("event consumer started",
+			slog.String("stream", string(cons.Stream())),
+			slog.Any("adapters", rt.AdapterNames()),
+		)
+		if err := cons.Run(ctx, rt.Handler()); err != nil && ctx.Err() == nil {
+			slog.Error("event consumer stopped",
+				slog.String("stream", string(cons.Stream())),
+				slog.String("error", err.Error()),
+			)
+		}
+	}()
 }
 
 func withEngineMiddleware(h http.Handler, deps api.RouterDeps) http.Handler {

@@ -12,12 +12,14 @@ import (
 
 	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
 	"github.com/monoposer/lowcode-bpmn/internal/engine"
+	"github.com/monoposer/lowcode-bpmn/internal/event"
 	"github.com/monoposer/lowcode-bpmn/internal/telemetry"
 )
 
 // RouterDeps holds shared handlers for HTTP routes.
 type RouterDeps struct {
 	Engine *engine.Engine
+	Events event.Publisher
 }
 
 // NewHTTPRouter constructs the HTTP router for lowcode-bpmn.
@@ -39,6 +41,11 @@ func NewHTTPRouter(deps RouterDeps) http.Handler {
 
 	r.Get("/api/v1/tasks", handleListUserTasks(deps))
 
+	r.Route("/api/v1/assignee-sync", func(r chi.Router) {
+		r.Post("/remove-user", handleAssigneeSyncRemoveUser(deps))
+		r.Post("/replace", handleAssigneeSyncReplace(deps))
+	})
+
 	r.Route("/api/v1/tenants/{tenantId}/processes", func(r chi.Router) {
 		r.Put("/{key}", handleDeployProcess(deps))
 		r.Get("/", handleListProcesses(deps))
@@ -51,8 +58,18 @@ func NewHTTPRouter(deps RouterDeps) http.Handler {
 			r.Get("/", handleGetProcessInstance(deps))
 			r.Get("/activities", handleListProcessActivities(deps))
 			r.Post("/tasks/{activityID}/complete", handleCompleteUserTask(deps))
+			r.Patch("/tasks/{activityID}/assignees", handleUpdateAssignees(deps))
+			r.Post("/terminate", handleTerminateInstance(deps))
 		})
 	})
+
+	r.Route("/api/v1/triggers", func(r chi.Router) {
+		r.Post("/message", handleTriggerMessage(deps))
+	})
+
+	r.Post("/api/v1/events/assignee/{source}", handleStreamInboundEvent(deps.Events, event.StreamAssignee))
+	r.Post("/api/v1/events/trigger/{source}", handleStreamInboundEvent(deps.Events, event.StreamTrigger))
+	r.Post("/api/v1/events/task/{source}", handleStreamInboundEvent(deps.Events, event.StreamTask))
 
 	return r
 }
@@ -215,6 +232,9 @@ func handleListProcessActivities(deps RouterDeps) http.HandlerFunc {
 }
 
 type completeTaskRequest struct {
+	Assignee    string         `json:"assignee,omitempty"`
+	Action      string         `json:"action,omitempty"`
+	Comment     string         `json:"comment,omitempty"`
 	Variables   map[string]any `json:"variables,omitempty"`
 	LockVersion int            `json:"lockVersion,omitempty"`
 }
@@ -241,6 +261,9 @@ func handleCompleteUserTask(deps RouterDeps) http.HandlerFunc {
 		inst, err := eng.CompleteTask(ctx, engine.CompleteTaskRequest{
 			ProcessInstanceID: instanceID,
 			ActivityID:        activityID,
+			Assignee:          req.Assignee,
+			Action:            req.Action,
+			Comment:           req.Comment,
 			Variables:         req.Variables,
 			LockVersion:       req.LockVersion,
 		})
@@ -276,5 +299,91 @@ func handleListUserTasks(deps RouterDeps) http.HandlerFunc {
 			tasks = []*engine.UserTask{}
 		}
 		writeJSON(w, http.StatusOK, tasks)
+	}
+}
+
+type terminateRequest struct {
+	ScopeID     string `json:"scopeId,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Operator    string `json:"operator,omitempty"`
+	LockVersion int    `json:"lockVersion,omitempty"`
+}
+
+func handleTerminateInstance(deps RouterDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		instanceID, err := uuid.Parse(chi.URLParam(r, "instanceID"))
+		if err != nil {
+			writeBadRequest(w, "invalid_instance_id", "invalid instanceID")
+			return
+		}
+		var req terminateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeBadRequest(w, "invalid_json", "invalid json body")
+			return
+		}
+		eng := getEngine(ctx, deps)
+		inst, err := eng.Terminate(ctx, engine.TerminateRequest{
+			ProcessInstanceID: instanceID,
+			ScopeID:           req.ScopeID,
+			Reason:            req.Reason,
+			Operator:          req.Operator,
+			LockVersion:       req.LockVersion,
+		})
+		if err != nil {
+			if err == engine.ErrVersionConflict {
+				writeError(w, http.StatusConflict, "version_conflict", err.Error())
+				return
+			}
+			writeBadRequest(w, "terminate_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, inst)
+	}
+}
+
+type updateAssigneesRequest struct {
+	Assignees        []string `json:"assignees"`
+	PendingAssignees []string `json:"pendingAssignees,omitempty"`
+	Operator         string   `json:"operator,omitempty"`
+	LockVersion      int      `json:"lockVersion,omitempty"`
+}
+
+func handleUpdateAssignees(deps RouterDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		instanceID, err := uuid.Parse(chi.URLParam(r, "instanceID"))
+		if err != nil {
+			writeBadRequest(w, "invalid_instance_id", "invalid instanceID")
+			return
+		}
+		activityID, err := uuid.Parse(chi.URLParam(r, "activityID"))
+		if err != nil {
+			writeBadRequest(w, "invalid_activity_id", "invalid activityID")
+			return
+		}
+		var req updateAssigneesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeBadRequest(w, "invalid_json", "invalid json body")
+			return
+		}
+		eng := getEngine(ctx, deps)
+		act, err := eng.UpdateActivityAssignees(ctx, engine.UpdateAssigneesRequest{
+			ProcessInstanceID: instanceID,
+			ActivityID:        activityID,
+			Assignees:         req.Assignees,
+			PendingAssignees:  req.PendingAssignees,
+			Operator:          req.Operator,
+			LockVersion:       req.LockVersion,
+		})
+		if err != nil {
+			if err == engine.ErrVersionConflict {
+				writeError(w, http.StatusConflict, "version_conflict", err.Error())
+				return
+			}
+			writeBadRequest(w, "update_assignees_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, act)
 	}
 }

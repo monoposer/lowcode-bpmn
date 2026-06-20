@@ -1,0 +1,87 @@
+---
+description: BPMN JSON model and expression rules
+globs: "internal/bpmn/**,internal/engine/bpmn_model.go"
+alwaysApply: false
+---
+
+# BPMN domain
+
+## Element kinds
+
+`startEvent`, `endEvent`, `userTask`, `scriptTask`, `exclusiveGateway`, `parallelGateway`, `inclusiveGateway`, `subProcess`
+
+## Gateways
+
+| Type | Fork | Join |
+|------|------|------|
+| exclusive | first matching condition; optional `isDefault` | — |
+| parallel | all outgoing | wait all incoming |
+| inclusive | all matching | same as parallel on join |
+
+Join token state → `ProcessInstance.InternalState` (not API-visible).
+
+## Conditions (`EvalCondition`)
+
+- **Sequence flows** at gateways only — NOT on linear start→next edges
+- Operators: `==`, `!=`, `>=`, `>`, `<=`, `<`, bare truthy field
+- Left-hand side supports dot paths: `order.amount >= 100`, `item.kk == 11`
+- Missing path: `==`/numeric → false; `!=` → true
+
+## startEvent (`eventDefinition`) — BPMN 2.0
+
+Schema: `schemas/process-definition.schema.json`, trigger: `schemas/trigger-message.schema.json`
+
+| type | BPMN 2.0 | JSON fields | Trigger |
+|------|----------|-------------|---------|
+| `none` | None start | (omit) | `POST /process-instances` |
+| `message` | messageEventDefinition | `messageRef`, `condition?`, `correlationKey?` | `POST /triggers/message` |
+| `conditional` | conditionalEventDefinition | `condition` | external + condition eval |
+| `signal` | signalEventDefinition | `signalRef` | future `/triggers/signal` |
+| `timer` | timerEventDefinition | `timerCycle` | external scheduler |
+
+Airtable / webhook pattern: Adapter normalizes payload → `POST /api/v1/triggers/message` with matching `messageRef`.
+
+## userTask fields
+
+- `assignees`: approver list
+- `approvalMode`: `any` | `all` | `sequential` (aliases: 或签, 会签, 顺签)
+- `requiredApprovals`: for `any` mode, GitHub-style quota from assignee pool (default **1**)
+- `returnTo`: element id to re-activate on reject (default: upstream userTask)
+- `onReject`: `return` (default) | `terminateScope`
+- `scopeId`: sub-process scope for parallel regions
+- `autoComplete`: skip wait (tests)
+- Complete API: `assignee`, `action` (approve|reject), `comment`, `variables`
+
+Partial completion persists `pending_assignees` and `approval_records` on the activity until the node finishes.
+
+## subProcess
+
+Marker element: `scopeId`, `entryRef`, `exitRef`. Elements with matching `scopeId` belong to the scope.
+
+- **Reject (`onReject: return`)**: re-activate `returnTo` (or default upstream userTask); only cancels same parallel branch (`branch_flow_id`); clears join tokens in scope.
+- **Terminate scope**: `POST .../terminate` with `{ "scopeId": "..." }` → cancels active activities in scope, instance stays `running` if work remains outside scope.
+- **Terminate instance**: `POST .../terminate` without `scopeId` → `status: cancelled`.
+
+## Runtime APIs
+
+- `POST /api/v1/assignee-sync/remove-user` — canonical personnel sync (adapter target)
+- `POST /api/v1/assignee-sync/replace`
+- `PATCH /api/v1/process-instances/{id}/tasks/{activityId}/assignees`
+- `POST /api/v1/process-instances/{id}/terminate`
+- `POST /api/v1/triggers/message` — message start (Airtable/webhook adapters)
+
+## Event plugins
+
+See [docs/plugins.md](../../docs/plugins.md).
+
+| Env | Role |
+|-----|------|
+| `EVENT_CONSUMER` | `memory` \| `redis` \| `none` |
+| `PLUGIN_ASSIGNEE_ADAPTERS` | Assignee stream (HR sync) |
+| `PLUGIN_TRIGGER_ADAPTERS` | Trigger stream (process start) |
+| `PLUGIN_TASK_ADAPTERS` | Task stream (approve / reject) |
+| `PLUGIN_WASM_DIR` | WASM + capability sandbox |
+
+Ingress: `POST /api/v1/events/assignee/{source}`, `POST /api/v1/events/trigger/{source}`, `POST /api/v1/events/task/{source}`.
+
+Activity fields: `scope_id`, `branch_flow_id`, `outcome` (`approve`|`reject`|`cancelled`).
