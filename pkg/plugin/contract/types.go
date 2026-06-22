@@ -46,6 +46,25 @@ type CompleteTaskRequest struct {
 	LockVersion       int
 }
 
+type CompleteActivityRequest struct {
+	ProcessInstanceID uuid.UUID
+	ActivityID        uuid.UUID
+	Assignee          string
+	Action            string
+	Comment           string
+	Variables         map[string]any
+	LockVersion       int
+	SelectedFlowID    string
+}
+
+type TriggerBoundaryRequest struct {
+	TenantID          string
+	ProcessInstanceID uuid.UUID
+	HostElementID     string
+	BoundaryElementID string
+	Variables         map[string]any
+}
+
 type TerminateRequest struct {
 	ProcessInstanceID uuid.UUID
 	ScopeID           string

@@ -143,6 +143,35 @@ func (h *EngineHost) CompleteTask(ctx context.Context, req contract.CompleteTask
 	return err
 }
 
+func (h *EngineHost) CompleteActivity(ctx context.Context, req contract.CompleteActivityRequest) error {
+	_, err := h.Eng.CompleteActivity(ctx, engine.CompleteActivityRequest{
+		ProcessInstanceID: req.ProcessInstanceID,
+		ActivityID:        req.ActivityID,
+		Assignee:          req.Assignee,
+		Action:            req.Action,
+		Comment:           req.Comment,
+		Variables:         req.Variables,
+		LockVersion:       req.LockVersion,
+		SelectedFlowID:    req.SelectedFlowID,
+	})
+	return err
+}
+
+func (h *EngineHost) TriggerBoundary(ctx context.Context, req contract.TriggerBoundaryRequest) error {
+	_, err := h.Eng.TriggerBoundary(ctx, engine.TriggerBoundaryRequest{
+		TenantID:          req.TenantID,
+		ProcessInstanceID: req.ProcessInstanceID,
+		HostElementID:     req.HostElementID,
+		BoundaryElementID: req.BoundaryElementID,
+		Variables:         req.Variables,
+	})
+	return err
+}
+
+func (h *EngineHost) EvaluateComplexGateway(ctx context.Context, processInstanceID uuid.UUID, gatewayElementID string) ([]string, error) {
+	return h.Eng.EvaluateComplexGateway(ctx, processInstanceID, gatewayElementID)
+}
+
 func (h *EngineHost) Terminate(ctx context.Context, req contract.TerminateRequest) error {
 	_, err := h.Eng.Terminate(ctx, engine.TerminateRequest{
 		ProcessInstanceID: req.ProcessInstanceID,

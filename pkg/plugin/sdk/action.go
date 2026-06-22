@@ -27,6 +27,10 @@ type Action struct {
 	LockVersion       int            `json:"lock_version,omitempty"`
 	ScopeID           string         `json:"scope_id,omitempty"`
 	Variables         map[string]any `json:"variables,omitempty"`
+	SelectedFlowID    string         `json:"selected_flow_id,omitempty"`
+	BoundaryElementID string         `json:"boundary_element_id,omitempty"`
+	HostElementID     string         `json:"host_element_id,omitempty"`
+	GatewayElementID  string         `json:"gateway_element_id,omitempty"`
 }
 
 func (a Action) InstanceID() (uuid.UUID, error) {

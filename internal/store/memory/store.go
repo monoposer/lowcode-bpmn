@@ -204,6 +204,19 @@ func (s *Store) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, 
 	return nil, nil
 }
 
+func (s *Store) ListRunningInstances(ctx context.Context, tenantID string) ([]*engine.ProcessInstance, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var res []*engine.ProcessInstance
+	for _, inst := range s.processInstances {
+		if inst.TenantID == tenantID && inst.Status == engine.ProcessStatusRunning {
+			copy := *inst
+			res = append(res, &copy)
+		}
+	}
+	return res, nil
+}
+
 func (s *Store) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

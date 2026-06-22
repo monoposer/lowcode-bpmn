@@ -49,6 +49,7 @@ func NewHTTPRouter(deps RouterDeps, auth AuthConfig) http.Handler {
 			r.Get("/", handleGetProcessInstance(deps))
 			r.Get("/activities", handleListProcessActivities(deps))
 			r.Post("/tasks/{activityID}/complete", handleCompleteUserTask(deps))
+			r.Post("/activities/{activityID}/complete", handleCompleteActivity(deps))
 			r.Patch("/tasks/{activityID}/assignees", handleUpdateAssignees(deps))
 			r.Post("/terminate", handleTerminateInstance(deps))
 		})
@@ -58,6 +59,7 @@ func NewHTTPRouter(deps RouterDeps, auth AuthConfig) http.Handler {
 		r.Post("/message", handleTriggerMessage(deps))
 		r.Post("/signal", handleTriggerSignal(deps))
 		r.Post("/conditional", handleTriggerConditional(deps))
+		r.Post("/boundary", handleTriggerBoundary(deps))
 	})
 
 	r.Post("/api/v1/events/assignee/{source}", handleStreamInboundEvent(deps.Events, event.StreamAssignee))

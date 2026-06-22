@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/monoposer/lowcode-bpmn/schemas/complete-activity.schema.json",
+  "title": "Complete Activity",
+  "description": "Complete a waiting extension activity (eventBasedGateway, complexGateway, callActivity, receiveTask). userTask should use complete-task schema via /tasks/{id}/complete.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "assignee": { "type": "string", "description": "Ignored unless activity is userTask (prefer /tasks/ complete)" },
+    "action": { "type": "string", "enum": ["approve", "reject"] },
+    "comment": { "type": "string" },
+    "variables": {
+      "type": "object",
+      "description": "Merged into process instance variables",
+      "additionalProperties": true
+    },
+    "lockVersion": { "type": "integer", "minimum": 0 },
+    "selectedFlowId": {
+      "type": "string",
+      "description": "For eventBasedGateway: outgoing sequenceFlow id to follow"
+    }
+  }
+}

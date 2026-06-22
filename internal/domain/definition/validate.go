@@ -1,4 +1,4 @@
-package bpmn
+package definition
 
 import "fmt"
 
@@ -11,7 +11,7 @@ func Validate(def ProcessDefinition) error {
 		return fmt.Errorf("process has no elements")
 	}
 
-	ids := make(map[string]struct{}, len(def.Elements))
+	ids := make(map[string]Element, len(def.Elements))
 	var startCount int
 	for _, el := range def.Elements {
 		if el.ID == "" {
@@ -20,7 +20,7 @@ func Validate(def ProcessDefinition) error {
 		if _, dup := ids[el.ID]; dup {
 			return fmt.Errorf("duplicate element id: %s", el.ID)
 		}
-		ids[el.ID] = struct{}{}
+		ids[el.ID] = el
 		if !isSupportedKind(el.Kind) {
 			return fmt.Errorf("unsupported element type %q on %s", el.Kind, el.ID)
 		}
@@ -33,6 +33,12 @@ func Validate(def ProcessDefinition) error {
 		case KindScriptTask, KindServiceTask, KindSendTask, KindReceiveTask, KindBusinessRuleTask, KindUserTask:
 			if err := ValidateTaskElement(el); err != nil {
 				return err
+			}
+		default:
+			if IsExtensionKind(el.Kind) {
+				if err := validateExtensionElement(el, ids); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -60,7 +66,18 @@ func Validate(def ProcessDefinition) error {
 		}
 	}
 
-	return nil
+	for _, lane := range def.LaneSet {
+		if lane.ID == "" {
+			return fmt.Errorf("lane id is required")
+		}
+		for _, ref := range lane.FlowNodeRefs {
+			if _, ok := ids[ref]; !ok {
+				return fmt.Errorf("lane %s: unknown flowNodeRef %s", lane.ID, ref)
+			}
+		}
+	}
+
+	return ValidateCollaboration(def)
 }
 
 func isSupportedKind(k ElementKind) bool {
@@ -69,7 +86,9 @@ func isSupportedKind(k ElementKind) bool {
 		KindUserTask, KindScriptTask,
 		KindServiceTask, KindSendTask, KindReceiveTask, KindBusinessRuleTask,
 		KindExclusiveGateway, KindParallelGateway, KindInclusiveGateway,
-		KindSubProcess:
+		KindSubProcess,
+		KindBoundaryEvent, KindIntermediateCatchEvent, KindIntermediateThrowEvent,
+		KindEventBasedGateway, KindComplexGateway, KindCallActivity:
 		return true
 	default:
 		return false

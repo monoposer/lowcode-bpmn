@@ -1,4 +1,4 @@
-package bpmn
+package definition
 
 import (
 	"fmt"
@@ -16,6 +16,7 @@ const (
 	EventTypeSignal      EventDefinitionType = "signal"      // signalEventDefinition
 	EventTypeTimer       EventDefinitionType = "timer"       // timerEventDefinition (metadata only; scheduler external)
 	EventTypeConditional EventDefinitionType = "conditional" // conditionalEventDefinition
+	EventTypeError       EventDefinitionType = "error"       // errorEventDefinition (boundary)
 )
 
 // EventDefinition describes how a startEvent is triggered (BPMN 2.0 eventDefinition).
@@ -27,6 +28,7 @@ type EventDefinition struct {
 	CorrelationKey string              `json:"correlationKey,omitempty"` // dot path → businessKey
 	Condition      string              `json:"condition,omitempty"`      // evaluated against trigger payload
 	TimerCycle     string              `json:"timerCycle,omitempty"`     // ISO-8601 repeat or cron (external scheduler)
+	ErrorRef       string              `json:"errorRef,omitempty"`       // errorEventDefinition
 }
 
 // EffectiveEventType returns the event definition type, defaulting to none.
@@ -39,31 +41,65 @@ func (e *EventDefinition) EffectiveEventType() EventDefinitionType {
 
 // ValidateStartEventEventDefinition checks BPMN start event definition rules.
 func ValidateStartEventEventDefinition(el Element) error {
+	return validateEventDefinitionForElement(el, KindStartEvent)
+}
+
+// ValidateEventDefinition checks eventDefinition on boundary and intermediate events.
+func ValidateEventDefinition(el Element) error {
+	if el.EventDefinition == nil {
+		switch el.Kind {
+		case KindBoundaryEvent, KindIntermediateCatchEvent:
+			return fmt.Errorf("%s %s requires eventDefinition", el.Kind, el.ID)
+		}
+		return nil
+	}
+	return validateEventDefinitionBody(el)
+}
+
+func validateEventDefinitionForElement(el Element, expectKind ElementKind) error {
+	ed := el.EventDefinition
+	if ed == nil {
+		return nil
+	}
+	if el.Kind != expectKind {
+		return fmt.Errorf("element %s: unexpected kind for event validation", el.ID)
+	}
+	return validateEventDefinitionBody(el)
+}
+
+func validateEventDefinitionBody(el Element) error {
 	ed := el.EventDefinition
 	if ed == nil {
 		return nil
 	}
 	switch ed.EffectiveEventType() {
 	case EventTypeNone:
+		if el.Kind == KindBoundaryEvent || el.Kind == KindIntermediateCatchEvent {
+			return fmt.Errorf("%s %s requires a non-none eventDefinition", el.Kind, el.ID)
+		}
 		return nil
 	case EventTypeMessage:
 		if ed.MessageRef == "" {
-			return fmt.Errorf("startEvent %s: message event requires messageRef", el.ID)
+			return fmt.Errorf("%s %s: message event requires messageRef", el.Kind, el.ID)
 		}
 	case EventTypeSignal:
 		if ed.SignalRef == "" {
-			return fmt.Errorf("startEvent %s: signal event requires signalRef", el.ID)
+			return fmt.Errorf("%s %s: signal event requires signalRef", el.Kind, el.ID)
 		}
 	case EventTypeTimer:
 		if ed.TimerCycle == "" {
-			return fmt.Errorf("startEvent %s: timer event requires timerCycle", el.ID)
+			return fmt.Errorf("%s %s: timer event requires timerCycle", el.Kind, el.ID)
 		}
 	case EventTypeConditional:
 		if ed.Condition == "" {
-			return fmt.Errorf("startEvent %s: conditional event requires condition", el.ID)
+			return fmt.Errorf("%s %s: conditional event requires condition", el.Kind, el.ID)
+		}
+	case EventTypeError:
+		if ed.ErrorRef == "" {
+			return fmt.Errorf("%s %s: error event requires errorRef", el.Kind, el.ID)
 		}
 	default:
-		return fmt.Errorf("startEvent %s: unsupported event type %q", el.ID, ed.Type)
+		return fmt.Errorf("%s %s: unsupported event type %q", el.Kind, el.ID, ed.Type)
 	}
 	return nil
 }

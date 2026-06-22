@@ -2,12 +2,13 @@
 
 Guide for agents working in **lowcode-bpmn**: a lightweight **BPMN 2.0** workflow engine in Go (`github.com/monoposer/lowcode-bpmn`).
 
-Human docs: [README.md](./README.md), [ARCHITECTURE.md](./ARCHITECTURE.md). Prefer this file for day-to-day agent context; update ARCHITECTURE when making structural changes.
+Human docs: [README.md](./README.md), [ARCHITECTURE.md](./ARCHITECTURE.md), [docs/ddd/README.md](./docs/ddd/README.md). Prefer this file for day-to-day agent context; update ARCHITECTURE when making structural changes.
 
 ## What this repo is
 
-- **In scope**: Deploy JSON process definitions, start instances, traverse gateways, wait on `userTask`, run `scriptTask`, task inbox API, async worker, persistence.
-- **Out of scope**: User/role management, form designer, Chinese OA patterns (会签/或签/顺签), subprocesses, boundary events, BPMN XML import.
+- **In scope**: Deploy JSON or BPMN XML process definitions, start instances, traverse gateways, wait on `userTask`, run `scriptTask`, embedded `subProcess` scopes, task inbox API, async worker, persistence, message/signal triggers, plugin adapters.
+- **Extension-backed** (not in engine core; plug in adapters): User/role management, form designer, boundary/intermediate events, event-based/complex gateways, call activity, multi-instance, pools/lanes, data objects/stores, service/send/receive/DMN tasks, compensation. See [docs/ddd/extensions.md](./docs/ddd/extensions.md).
+- **Not in engine core by design**: Full BPMN DI diagram layout fidelity.
 - **No legacy code**: Stage/DAG orchestrator was removed. Do not reintroduce it.
 
 External systems own auth, forms, and approval UX. This service executes BPMN and exposes HTTP APIs.
@@ -17,16 +18,24 @@ External systems own auth, forms, and approval UX. This service executes BPMN an
 ```
 cmd/server/              HTTP entrypoint, CORS, worker startup
 internal/api/            Chi routes, metrics, JSON error envelope
-internal/bpmn/           JSON model, validate, registry, conditions
-internal/engine/         Engine, worker, engine.Store interface, domain types
+internal/application/    Use-case layer (orchestration lives in engine)
+internal/domain/
+  definition/            Process Design — BPMN IR, validate, conditions, approval rules
+  runtime/               Process Runtime — instances, activities, jobs, inbox DTOs
+  ports/                 ProcessRepository persistence port
+internal/bpmn/           Deprecated compat shim → definition (compat.go only)
+internal/bpmnxml/        BPMN 2.0 XML import/export
+internal/engine/         Engine, worker; Store alias to ports.ProcessRepository
 internal/script/         ScriptTask runner (goja JS + log; http.* in JS)
 internal/store/
   open.go                STORE_BACKEND factory (db | file | memory)
   gormstore/             Postgres / MySQL / SQLite via GORM
-  filestore/             YAML snapshot at {STORE_PATH}/state.yaml
+  filestore/             YAML / XML snapshot at {STORE_PATH}
   memory/                In-memory store for unit tests
 internal/telemetry/      slog, OTel traces, HTTP middleware
 deploy/docker/           Dockerfile, entrypoint (volume permissions), compose
+docs/ddd/                DDD layer guides per bounded context
+docs/bpmn-compliance.md  BPMN 2.0 support matrix
 ```
 
 Demo UI (separate path): `../examples/bpmn/client` — Vite + React playground; not in this repo.
@@ -74,9 +83,23 @@ JSON Schema: [`schemas/process-definition.schema.json`](./schemas/process-defini
 - **Event plugins**: triple consumers (`assignee` + `trigger` + `task`), WASM + capabilities. See [docs/plugins.md](./docs/plugins.md).
 - **subProcess**: marker with `scopeId`, `entryRef`, `exitRef` for scoped parallel work.
 - **scriptTask**: `scriptLang: "javascript"` (default) or `"log"`; JS has `vars`, `http.get/post/request`
-- **Conditions** (`internal/bpmn/expression.go`): `==`, `!=`, numeric compares, truthy field; dot paths supported (`item.kk >= 10`).
+- **Conditions** (`internal/domain/definition/expression.go`): `==`, `!=`, numeric compares, truthy field; dot paths supported (`item.kk >= 10`).
 
 Each deploy creates a **new version**. Instances pin `definition_snapshot` at start.
+
+### Extension elements (adapter-backed)
+
+Modeled in IR; engine pauses as `active` until plugin or HTTP completes them. See [docs/ddd/extensions.md](./docs/ddd/extensions.md).
+
+| Element | Trigger / complete |
+|---------|-------------------|
+| `boundaryEvent` | `POST /triggers/message` (message boundary) or `POST /triggers/boundary` (timer/explicit) |
+| `eventBasedGateway` | `POST .../activities/{id}/complete` with `selectedFlowId` |
+| `complexGateway` | `POST .../activities/{id}/complete` (evaluates flow conditions) |
+| `callActivity` | `POST .../activities/{id}/complete` (starts `calledElement` subprocess) |
+| Pool `messageFlow` | `POST /triggers/message` with matching `messageRef` → partner pool process |
+
+Plugin Host SDK: `TriggerBoundary`, `CompleteActivity`, `EvaluateComplexGateway`. WASM: `trigger_boundary`, `complete_activity`, `evaluate_complex_gateway`.
 
 ## HTTP API (summary)
 
@@ -88,7 +111,10 @@ Each deploy creates a **new version**. Instances pin `definition_snapshot` at st
 | GET | `/api/v1/tenants/{tenantId}/processes` | List latest per key |
 | DELETE | `/api/v1/tenants/{tenantId}/processes/{key}` | Delete all versions |
 | POST | `/api/v1/process-instances` | Start |
-| POST | `/api/v1/triggers/message` | Message start (direct) |
+| POST | `/api/v1/triggers/message` | Message start (direct); also fires matching **boundary events** on running instances (`boundary_matches` in response) |
+| POST | `/api/v1/triggers/signal` | Signal start |
+| POST | `/api/v1/triggers/conditional` | Conditional start |
+| POST | `/api/v1/triggers/boundary` | Explicit boundary trigger (timer scheduler / error handler) |
 | POST | `/api/v1/events/assignee/{source}` | Assignee stream plugin ingress |
 | POST | `/api/v1/events/trigger/{source}` | Trigger stream plugin ingress |
 | POST | `/api/v1/events/task/{source}` | Task stream plugin ingress |
@@ -96,6 +122,7 @@ Each deploy creates a **new version**. Instances pin `definition_snapshot` at st
 | GET | `/api/v1/process-instances/{id}` | Instance + variables + `lock_version` |
 | GET | `/api/v1/process-instances/{id}/activities` | Activity trail |
 | POST | `/api/v1/process-instances/{id}/tasks/{activityId}/complete` | Complete userTask |
+| POST | `/api/v1/process-instances/{id}/activities/{activityId}/complete` | Complete extension activity (eventBasedGateway, complexGateway, callActivity, receiveTask) — optional `selectedFlowId` |
 | PATCH | `/api/v1/process-instances/{id}/tasks/{activityId}/assignees` | Update assignees |
 | POST | `/api/v1/assignee-sync/remove-user` | Canonical: remove user from active tasks |
 | POST | `/api/v1/assignee-sync/replace` | Canonical: replace task assignees |
@@ -116,21 +143,36 @@ go run ./cmd/server
 docker compose up -d --build
 ```
 
+## TDD (by DDD layer)
+
+Full guide: [docs/ddd/testing.md](./docs/ddd/testing.md). Cursor rule: [.cursor/rules/ddd-tdd.mdc](./.cursor/rules/ddd-tdd.mdc).
+
+| Layer | Where to test | Example |
+|-------|---------------|---------|
+| Process Design | `internal/domain/definition/*_test.go` | `approval_test.go` |
+| Process Runtime | `internal/domain/runtime/*_test.go` | `lifecycle_test.go` |
+| Ports contract | `internal/domain/ports/testing/contract.go` | `RunProcessRepositoryContract` |
+| Store adapters | `internal/store/*/contract_test.go` | `memory/contract_test.go` |
+| Application | `internal/engine/*_test.go` | `engine_test.go` with `memory` store |
+| HTTP | `internal/api/*_test.go` | httptest only |
+
+**Red → Green → Refactor** for new domain behavior: write the failing test in `domain/*` first, implement, then run `go test ./...`. Do not test domain logic through HTTP unless in `internal/api`.
+
 ## Change guidelines for agents
 
-1. **Minimal diffs** — Match existing style; extend `engine.Store` only when persistence needs it; implement in `memory`, `gormstore`, and `filestore` together.
-2. **Tests** — Add/update tests in `internal/bpmn`, `internal/engine`, or store packages; use `memory` store for engine tests.
+1. **Minimal diffs** — Match existing style; extend `ports.ProcessRepository` (via `engine.Store`) only when persistence needs it; implement in `memory`, `gormstore`, and `filestore` together.
+2. **Tests** — Follow [docs/ddd/testing.md](./docs/ddd/testing.md); add domain tests in `definition`/`runtime`, contract tests for port changes, engine tests with `memory` store. Prefer importing `definition` over deprecated `internal/bpmn`.
 3. **Transactions** — Multi-step writes go through `Store.WithTx`.
 4. **API** — Keep JSON-first; wire new routes in `internal/api/http.go` with consistent error codes.
 5. **Do not** add auth middleware unless explicitly requested — use `API_KEY` / `AUTH_REQUIRED` env instead when enabling auth.
 
-## Known gaps (do not assume implemented)
+## Known gaps (do not assume core-native)
 
-- Authentication / authorization (optional API keys — set `API_KEY` or `AUTH_REQUIRED`)
-- Boundary events, BPMN XML
-- Multi-instance loops
-- Idempotent start by `businessKey` (message trigger — running instance dedupe)
-- Webhooks / SSE for task events (inbound message trigger: `POST /api/v1/triggers/message`)
+- Authentication / authorization (optional API keys — set `API_KEY` or `AUTH_REQUIRED`; user/role systems via **assignee** plugins)
+- Boundary events, call activity, multi-instance, event-based/complex gateways, pools/lanes — **modeled via extensions** when IR fields and adapters exist; see [docs/ddd/extensions.md](./docs/ddd/extensions.md)
+- Timer start scheduling (metadata in core; external scheduler or **trigger** plugin required)
+- Idempotent start by `businessKey` (message trigger — running instance dedupe **is** supported)
+- Webhooks / SSE for task events (inbound message trigger: `POST /api/v1/triggers/message`; outbound webhooks planned)
 
 ## When editing related projects
 

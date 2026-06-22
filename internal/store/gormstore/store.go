@@ -215,6 +215,26 @@ func (s *Store) FindRunningInstanceByBusinessKey(ctx context.Context, tenantID, 
 	return instanceFromModel(&row)
 }
 
+func (s *Store) ListRunningInstances(ctx context.Context, tenantID string) ([]*engine.ProcessInstance, error) {
+	var rows []BpmnInstance
+	err := s.conn(ctx).
+		Where("tenant_id = ? AND status = ?", tenantID, engine.ProcessStatusRunning).
+		Order("started_at ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*engine.ProcessInstance, 0, len(rows))
+	for i := range rows {
+		inst, err := instanceFromModel(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, inst)
+	}
+	return out, nil
+}
+
 func (s *Store) CreateActivityInstance(ctx context.Context, act *engine.ActivityInstance) error {
 	if act.ID == uuid.Nil {
 		act.ID = newUUID()

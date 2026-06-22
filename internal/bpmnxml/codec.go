@@ -7,31 +7,41 @@ import (
 	"io"
 	"strings"
 
-	"github.com/monoposer/lowcode-bpmn/internal/bpmn"
+	"github.com/monoposer/lowcode-bpmn/internal/domain/definition"
 )
 
 // Parse reads BPMN 2.0 XML (.bpmn / .bpmn20.xml) into the engine process IR.
-func Parse(data []byte) (bpmn.ProcessDefinition, error) {
+func Parse(data []byte) (definition.ProcessDefinition, error) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 	var root xmlDefinitions
 	if err := dec.Decode(&root); err != nil {
-		return bpmn.ProcessDefinition{}, fmt.Errorf("bpmn xml: %w", err)
+		return definition.ProcessDefinition{}, fmt.Errorf("bpmn xml: %w", err)
 	}
 	if len(root.Processes) == 0 {
-		return bpmn.ProcessDefinition{}, fmt.Errorf("bpmn xml: no process element")
+		return definition.ProcessDefinition{}, fmt.Errorf("bpmn xml: no process element")
 	}
-	return mapProcess(root.Processes[0])
+	def, err := mapProcess(root.Processes[0])
+	if err != nil {
+		return def, err
+	}
+	if collab := mapCollaborationForProcess(root.Collaborations, root.Processes[0].ID); collab != nil {
+		def.Collaboration = collab
+	}
+	return def, nil
 }
 
 // Marshal writes BPMN 2.0 XML for a process definition.
-func Marshal(def bpmn.ProcessDefinition) ([]byte, error) {
+func Marshal(def definition.ProcessDefinition) ([]byte, error) {
 	root := xmlDefinitions{
 		Xmlns:    BPMNNS,
 		XmlnsXSI: XSINS,
 		XmlnsLC:  LCNS,
-		TargetNS: "http://bpmn.io/schema/bpmn",
+		TargetNS: "http://definition.io/schema/bpmn",
 		Processes: []xmlProcess{buildXMLProcess(def)},
+	}
+	if def.Collaboration != nil {
+		root.Collaborations = []xmlCollaboration{buildXMLCollaboration(def.Collaboration, def.ID)}
 	}
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
@@ -44,43 +54,89 @@ func Marshal(def bpmn.ProcessDefinition) ([]byte, error) {
 }
 
 // ParseReader is Parse from an io.Reader.
-func ParseReader(r io.Reader) (bpmn.ProcessDefinition, error) {
+func ParseReader(r io.Reader) (definition.ProcessDefinition, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
-		return bpmn.ProcessDefinition{}, err
+		return definition.ProcessDefinition{}, err
 	}
 	return Parse(raw)
 }
 
 type xmlDefinitions struct {
-	XMLName   xml.Name     `xml:"definitions"`
-	Xmlns     string       `xml:"xmlns,attr"`
-	XmlnsXSI  string       `xml:"xmlns:xsi,attr,omitempty"`
-	XmlnsLC   string       `xml:"xmlns:lc,attr,omitempty"`
-	TargetNS  string       `xml:"targetNamespace,attr,omitempty"`
-	Processes []xmlProcess `xml:"process"`
+	XMLName        xml.Name            `xml:"definitions"`
+	Xmlns          string              `xml:"xmlns,attr"`
+	XmlnsXSI       string              `xml:"xmlns:xsi,attr,omitempty"`
+	XmlnsLC        string              `xml:"xmlns:lc,attr,omitempty"`
+	TargetNS       string              `xml:"targetNamespace,attr,omitempty"`
+	Collaborations []xmlCollaboration  `xml:"collaboration"`
+	Processes      []xmlProcess        `xml:"process"`
+}
+
+type xmlCollaboration struct {
+	ID           string             `xml:"id,attr,omitempty"`
+	Participants []xmlParticipant   `xml:"participant"`
+	MessageFlows []xmlMessageFlowEl `xml:"messageFlow"`
+}
+
+type xmlParticipant struct {
+	ID         string `xml:"id,attr"`
+	Name       string `xml:"name,attr,omitempty"`
+	ProcessRef string `xml:"processRef,attr,omitempty"`
+}
+
+type xmlMessageFlowEl struct {
+	ID         string `xml:"id,attr"`
+	Name       string `xml:"name,attr,omitempty"`
+	SourceRef  string `xml:"sourceRef,attr"`
+	TargetRef  string `xml:"targetRef,attr"`
+	MessageRef string `xml:"messageRef,attr,omitempty"`
 }
 
 type xmlProcess struct {
-	XMLName xml.Name `xml:"process"`
-	ID      string   `xml:"id,attr"`
-	Name    string   `xml:"name,attr,omitempty"`
-	Executable bool  `xml:"isExecutable,attr,omitempty"`
-
+	XMLName    xml.Name         `xml:"process"`
+	ID         string           `xml:"id,attr"`
+	Name       string           `xml:"name,attr,omitempty"`
+	Executable bool             `xml:"isExecutable,attr,omitempty"`
+	LaneSets   []xmlLaneSet     `xml:"laneSet"`
+	DataObjects []xmlNamedRef   `xml:"dataObjectReference"`
+	DataStores  []xmlNamedRef   `xml:"dataStoreReference"`
 	FlowElements []xmlFlowElement `xml:",any"`
 }
 
+type xmlLaneSet struct {
+	ID    string    `xml:"id,attr,omitempty"`
+	Lanes []xmlLane `xml:"lane"`
+}
+
+type xmlLane struct {
+	ID           string   `xml:"id,attr"`
+	Name         string   `xml:"name,attr,omitempty"`
+	FlowNodeRefs []string `xml:"flowNodeRef"`
+}
+
+type xmlNamedRef struct {
+	ID   string `xml:"id,attr"`
+	Name string `xml:"name,attr,omitempty"`
+}
+
 type xmlFlowElement struct {
-	XMLName  xml.Name
-	ID       string `xml:"id,attr"`
-	Name     string `xml:"name,attr,omitempty"`
+	XMLName   xml.Name
+	ID        string `xml:"id,attr"`
+	Name      string `xml:"name,attr,omitempty"`
 	SourceRef string `xml:"sourceRef,attr,omitempty"`
 	TargetRef string `xml:"targetRef,attr,omitempty"`
+
+	AttachedToRef  string `xml:"attachedToRef,attr,omitempty"`
+	CancelActivity *bool  `xml:"cancelActivity,attr,omitempty"`
+	CalledElement  string `xml:"calledElement,attr,omitempty"`
 
 	MessageEventDef *xmlMessageEventDef `xml:"messageEventDefinition"`
 	SignalEventDef  *xmlSignalEventDef  `xml:"signalEventDefinition"`
 	TimerEventDef   *xmlTimerEventDef   `xml:"timerEventDefinition"`
 	ConditionalDef  *xmlConditionalDef  `xml:"conditionalEventDefinition"`
+	ErrorEventDef   *xmlErrorEventDef   `xml:"errorEventDefinition"`
+
+	MultiInstance *xmlMultiInstance `xml:"multiInstanceLoopCharacteristics"`
 
 	ConditionExpr *xmlConditionExpr `xml:"conditionExpression"`
 	Default       *xmlDefaultFlow   `xml:"default"`
@@ -88,6 +144,16 @@ type xmlFlowElement struct {
 	ExtensionElements *xmlExtensionElements `xml:"extensionElements"`
 
 	Script *xmlScript `xml:"script"`
+}
+
+type xmlErrorEventDef struct {
+	ErrorRef string `xml:"errorRef,attr"`
+}
+
+type xmlMultiInstance struct {
+	IsSequential    bool   `xml:"isSequential,attr,omitempty"`
+	Collection      string `xml:"collection,attr,omitempty"`
+	ElementVariable string `xml:"elementVariable,attr,omitempty"`
 }
 
 type xmlMessageEventDef struct {
@@ -140,6 +206,9 @@ type xmlExtensionElements struct {
 	ScopeID        string        `xml:"scopeId"`
 	EntryRef       string        `xml:"entryRef"`
 	ExitRef        string        `xml:"exitRef"`
+	FormKey        string        `xml:"formKey"`
+	FormURL        string        `xml:"formUrl"`
+	ExtensionHandler string      `xml:"extensionHandler"`
 	Properties     []xmlProperty `xml:"property"`
 
 	LCTaskType       string `xml:"http://github.com/monoposer/lowcode-bpmn/extensions taskType"`
@@ -157,19 +226,35 @@ type xmlProperty struct {
 	Value string `xml:"value,attr"`
 }
 
-func mapProcess(p xmlProcess) (bpmn.ProcessDefinition, error) {
-	def := bpmn.ProcessDefinition{
+func mapProcess(p xmlProcess) (definition.ProcessDefinition, error) {
+	def := definition.ProcessDefinition{
 		ID:   p.ID,
 		Name: p.Name,
 	}
-	var elements []bpmn.Element
-	var flows []bpmn.SequenceFlow
+	var elements []definition.Element
+	var flows []definition.SequenceFlow
+
+	for _, ls := range p.LaneSets {
+		for _, lane := range ls.Lanes {
+			def.LaneSet = append(def.LaneSet, definition.Lane{
+				ID:           lane.ID,
+				Name:         lane.Name,
+				FlowNodeRefs: append([]string(nil), lane.FlowNodeRefs...),
+			})
+		}
+	}
+	for _, d := range p.DataObjects {
+		def.DataObjects = append(def.DataObjects, definition.DataObject{ID: d.ID, Name: d.Name})
+	}
+	for _, d := range p.DataStores {
+		def.DataStores = append(def.DataStores, definition.DataStore{ID: d.ID, Name: d.Name})
+	}
 
 	for _, fe := range p.FlowElements {
 		local := fe.XMLName.Local
 		switch local {
 		case "sequenceFlow":
-			flows = append(flows, bpmn.SequenceFlow{
+			flows = append(flows, definition.SequenceFlow{
 				ID:        fe.ID,
 				Name:      fe.Name,
 				SourceRef: fe.SourceRef,
@@ -182,7 +267,17 @@ func mapProcess(p xmlProcess) (bpmn.ProcessDefinition, error) {
 			if !ok {
 				continue
 			}
-			el := bpmn.Element{ID: fe.ID, Kind: kind, Name: fe.Name}
+			el := definition.Element{ID: fe.ID, Kind: kind, Name: fe.Name}
+			el.AttachedToRef = fe.AttachedToRef
+			el.CancelActivity = fe.CancelActivity
+			el.CalledElement = fe.CalledElement
+			if fe.MultiInstance != nil {
+				el.MultiInstance = &definition.MultiInstanceLoopCharacteristics{
+					IsSequential:    fe.MultiInstance.IsSequential,
+					Collection:      fe.MultiInstance.Collection,
+					ElementVariable: fe.MultiInstance.ElementVariable,
+				}
+			}
 			if fe.Script != nil {
 				el.Script = strings.TrimSpace(fe.Script.Body)
 				el.ScriptLang = fe.Script.Format
@@ -193,10 +288,13 @@ func mapProcess(p xmlProcess) (bpmn.ProcessDefinition, error) {
 			if fe.ExtensionElements != nil {
 				applyExtensions(&el, fe.ExtensionElements)
 			}
-			if kind == bpmn.KindStartEvent {
-				el.EventDefinition = mapStartEventDef(fe)
+			if kind == definition.KindStartEvent ||
+				kind == definition.KindBoundaryEvent ||
+				kind == definition.KindIntermediateCatchEvent ||
+				kind == definition.KindIntermediateThrowEvent {
+				el.EventDefinition = mapEventDef(fe)
 			}
-			if kind == bpmn.KindReceiveTask && el.MessageRef != "" {
+			if kind == definition.KindReceiveTask && el.MessageRef != "" {
 				// receiveTask message correlation
 			}
 			elements = append(elements, el)
@@ -204,68 +302,83 @@ func mapProcess(p xmlProcess) (bpmn.ProcessDefinition, error) {
 	}
 
 	if def.ID == "" {
-		return bpmn.ProcessDefinition{}, fmt.Errorf("bpmn xml: process id required")
+		return definition.ProcessDefinition{}, fmt.Errorf("bpmn xml: process id required")
 	}
 	def.Elements = elements
 	def.Flows = flows
 	return def, nil
 }
 
-func xmlLocalToKind(local string) (bpmn.ElementKind, bool) {
+func xmlLocalToKind(local string) (definition.ElementKind, bool) {
 	switch local {
 	case "startEvent":
-		return bpmn.KindStartEvent, true
+		return definition.KindStartEvent, true
 	case "endEvent":
-		return bpmn.KindEndEvent, true
+		return definition.KindEndEvent, true
 	case "userTask":
-		return bpmn.KindUserTask, true
+		return definition.KindUserTask, true
 	case "scriptTask":
-		return bpmn.KindScriptTask, true
+		return definition.KindScriptTask, true
 	case "serviceTask":
-		return bpmn.KindServiceTask, true
+		return definition.KindServiceTask, true
 	case "sendTask":
-		return bpmn.KindSendTask, true
+		return definition.KindSendTask, true
 	case "receiveTask":
-		return bpmn.KindReceiveTask, true
+		return definition.KindReceiveTask, true
 	case "businessRuleTask":
-		return bpmn.KindBusinessRuleTask, true
+		return definition.KindBusinessRuleTask, true
 	case "exclusiveGateway":
-		return bpmn.KindExclusiveGateway, true
+		return definition.KindExclusiveGateway, true
 	case "parallelGateway":
-		return bpmn.KindParallelGateway, true
+		return definition.KindParallelGateway, true
 	case "inclusiveGateway":
-		return bpmn.KindInclusiveGateway, true
+		return definition.KindInclusiveGateway, true
 	case "subProcess":
-		return bpmn.KindSubProcess, true
+		return definition.KindSubProcess, true
+	case "boundaryEvent":
+		return definition.KindBoundaryEvent, true
+	case "intermediateCatchEvent":
+		return definition.KindIntermediateCatchEvent, true
+	case "intermediateThrowEvent":
+		return definition.KindIntermediateThrowEvent, true
+	case "eventBasedGateway":
+		return definition.KindEventBasedGateway, true
+	case "complexGateway":
+		return definition.KindComplexGateway, true
+	case "callActivity":
+		return definition.KindCallActivity, true
 	default:
 		return "", false
 	}
 }
 
-func mapStartEventDef(fe xmlFlowElement) *bpmn.EventDefinition {
-	ed := &bpmn.EventDefinition{}
+func mapEventDef(fe xmlFlowElement) *definition.EventDefinition {
+	ed := &definition.EventDefinition{}
 	switch {
 	case fe.MessageEventDef != nil:
-		ed.Type = bpmn.EventTypeMessage
+		ed.Type = definition.EventTypeMessage
 		ed.MessageRef = fe.MessageEventDef.MessageRef
 		if fe.ExtensionElements != nil {
 			ed.CorrelationKey = fe.ExtensionElements.CorrelationKey
 		}
 	case fe.SignalEventDef != nil:
-		ed.Type = bpmn.EventTypeSignal
+		ed.Type = definition.EventTypeSignal
 		ed.SignalRef = fe.SignalEventDef.SignalRef
 	case fe.TimerEventDef != nil:
-		ed.Type = bpmn.EventTypeTimer
+		ed.Type = definition.EventTypeTimer
 		if fe.TimerEventDef.TimeCycle != "" {
 			ed.TimerCycle = strings.TrimSpace(fe.TimerEventDef.TimeCycle)
 		} else {
 			ed.TimerCycle = strings.TrimSpace(fe.TimerEventDef.TimeDate)
 		}
 	case fe.ConditionalDef != nil && fe.ConditionalDef.Condition != nil:
-		ed.Type = bpmn.EventTypeConditional
+		ed.Type = definition.EventTypeConditional
 		ed.Condition = strings.TrimSpace(conditionBody(fe.ConditionalDef.Condition))
+	case fe.ErrorEventDef != nil:
+		ed.Type = definition.EventTypeError
+		ed.ErrorRef = fe.ErrorEventDef.ErrorRef
 	default:
-		ed.Type = bpmn.EventTypeNone
+		ed.Type = definition.EventTypeNone
 	}
 	if fe.ExtensionElements != nil {
 		ed.CorrelationKey = firstNonEmpty(fe.ExtensionElements.CorrelationKey, fe.ExtensionElements.LCCorrelationKey)
@@ -276,7 +389,12 @@ func mapStartEventDef(fe xmlFlowElement) *bpmn.EventDefinition {
 	return ed
 }
 
-func applyExtensions(el *bpmn.Element, ext *xmlExtensionElements) {
+// mapStartEventDef is an alias for backward compatibility within this package.
+func mapStartEventDef(fe xmlFlowElement) *definition.EventDefinition {
+	return mapEventDef(fe)
+}
+
+func applyExtensions(el *definition.Element, ext *xmlExtensionElements) {
 	el.TaskType = firstNonEmpty(ext.TaskType, ext.LCTaskType)
 	el.Implementation = firstNonEmpty(ext.Implementation, ext.LCImplementation)
 	el.ServiceURL = firstNonEmpty(ext.ServiceURL, ext.LCServiceURL)
@@ -298,6 +416,9 @@ func applyExtensions(el *bpmn.Element, ext *xmlExtensionElements) {
 	}
 	el.AssigneesVariable = ext.AssigneesVar
 	el.ApprovalMode = ext.ApprovalMode
+	el.FormKey = ext.FormKey
+	el.FormURL = ext.FormURL
+	el.ExtensionHandler = ext.ExtensionHandler
 	if len(ext.Properties) > 0 {
 		if el.Properties == nil {
 			el.Properties = make(map[string]any, len(ext.Properties))
@@ -351,11 +472,28 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-func buildXMLProcess(def bpmn.ProcessDefinition) xmlProcess {
+func buildXMLProcess(def definition.ProcessDefinition) xmlProcess {
 	p := xmlProcess{
 		ID:         def.ID,
 		Name:       def.Name,
 		Executable: true,
+	}
+	if len(def.LaneSet) > 0 {
+		ls := xmlLaneSet{}
+		for _, lane := range def.LaneSet {
+			ls.Lanes = append(ls.Lanes, xmlLane{
+				ID:           lane.ID,
+				Name:         lane.Name,
+				FlowNodeRefs: append([]string(nil), lane.FlowNodeRefs...),
+			})
+		}
+		p.LaneSets = []xmlLaneSet{ls}
+	}
+	for _, d := range def.DataObjects {
+		p.DataObjects = append(p.DataObjects, xmlNamedRef{ID: d.ID, Name: d.Name})
+	}
+	for _, d := range def.DataStores {
+		p.DataStores = append(p.DataStores, xmlNamedRef{ID: d.ID, Name: d.Name})
 	}
 	for _, el := range def.Elements {
 		p.FlowElements = append(p.FlowElements, elementToXML(el))
@@ -379,49 +517,74 @@ func buildXMLProcess(def bpmn.ProcessDefinition) xmlProcess {
 	return p
 }
 
-func elementToXML(el bpmn.Element) xmlFlowElement {
+func elementToXML(el definition.Element) xmlFlowElement {
 	fe := xmlFlowElement{
-		XMLName: xml.Name{Space: BPMNNS, Local: kindToXMLLocal(el.Kind)},
-		ID:      el.ID,
-		Name:    el.Name,
+		XMLName:       xml.Name{Space: BPMNNS, Local: kindToXMLLocal(el.Kind)},
+		ID:            el.ID,
+		Name:          el.Name,
+		AttachedToRef: el.AttachedToRef,
+		CancelActivity: el.CancelActivity,
+		CalledElement: el.CalledElement,
+	}
+	if el.MultiInstance != nil {
+		fe.MultiInstance = &xmlMultiInstance{
+			IsSequential:    el.MultiInstance.IsSequential,
+			Collection:      el.MultiInstance.Collection,
+			ElementVariable: el.MultiInstance.ElementVariable,
+		}
 	}
 	if el.Script != "" {
 		fe.Script = &xmlScript{Format: el.ScriptLang, Body: el.Script}
 	}
 	fe.ExtensionElements = extensionsFromElement(el)
-	if el.Kind == bpmn.KindStartEvent {
-		attachStartEventDef(&fe, el.EventDefinition)
+	if el.EventDefinition != nil && needsEventDefXML(el.Kind) {
+		attachEventDef(&fe, el.EventDefinition)
 	}
 	return fe
 }
 
-func kindToXMLLocal(k bpmn.ElementKind) string {
+func needsEventDefXML(k definition.ElementKind) bool {
+	switch k {
+	case definition.KindStartEvent, definition.KindBoundaryEvent,
+		definition.KindIntermediateCatchEvent, definition.KindIntermediateThrowEvent:
+		return true
+	default:
+		return false
+	}
+}
+
+func kindToXMLLocal(k definition.ElementKind) string {
 	return string(k)
 }
 
-func extensionsFromElement(el bpmn.Element) *xmlExtensionElements {
+func extensionsFromElement(el definition.Element) *xmlExtensionElements {
 	if el.TaskType == "" && el.Implementation == "" && el.ServiceURL == "" &&
 		el.MessageRef == "" && el.DecisionRef == "" && len(el.Assignees) == 0 &&
 		el.AssigneesVariable == "" && el.ApprovalMode == "" && !el.AutoComplete &&
 		el.ReturnTo == "" && el.OnReject == "" && el.ScopeID == "" &&
-		el.EntryRef == "" && el.ExitRef == "" && el.ScriptLang == "" && len(el.Properties) == 0 {
+		el.EntryRef == "" && el.ExitRef == "" && el.ScriptLang == "" &&
+		el.FormKey == "" && el.FormURL == "" && el.ExtensionHandler == "" &&
+		len(el.Properties) == 0 {
 		return nil
 	}
 	ext := &xmlExtensionElements{
-		TaskType:       el.TaskType,
-		Implementation: el.Implementation,
-		ServiceURL:     el.ServiceURL,
-		ServiceMethod:  el.ServiceMethod,
-		MessageRef:     el.MessageRef,
-		DecisionRef:    el.DecisionRef,
-		ScriptLang:     el.ScriptLang,
-		AssigneesVar:   el.AssigneesVariable,
-		ApprovalMode:   el.ApprovalMode,
-		ReturnTo:       el.ReturnTo,
-		OnReject:       el.OnReject,
-		ScopeID:        el.ScopeID,
-		EntryRef:       el.EntryRef,
-		ExitRef:        el.ExitRef,
+		TaskType:           el.TaskType,
+		Implementation:     el.Implementation,
+		ServiceURL:         el.ServiceURL,
+		ServiceMethod:      el.ServiceMethod,
+		MessageRef:         el.MessageRef,
+		DecisionRef:        el.DecisionRef,
+		ScriptLang:         el.ScriptLang,
+		AssigneesVar:       el.AssigneesVariable,
+		ApprovalMode:       el.ApprovalMode,
+		ReturnTo:           el.ReturnTo,
+		OnReject:           el.OnReject,
+		ScopeID:            el.ScopeID,
+		EntryRef:           el.EntryRef,
+		ExitRef:            el.ExitRef,
+		FormKey:            el.FormKey,
+		FormURL:            el.FormURL,
+		ExtensionHandler:   el.ExtensionHandler,
 	}
 	if el.AutoComplete {
 		v := true
@@ -436,25 +599,76 @@ func extensionsFromElement(el bpmn.Element) *xmlExtensionElements {
 	return ext
 }
 
-func attachStartEventDef(fe *xmlFlowElement, ed *bpmn.EventDefinition) {
+func attachEventDef(fe *xmlFlowElement, ed *definition.EventDefinition) {
 	if ed == nil {
 		return
 	}
 	switch ed.EffectiveEventType() {
-	case bpmn.EventTypeMessage:
+	case definition.EventTypeMessage:
 		fe.MessageEventDef = &xmlMessageEventDef{MessageRef: ed.MessageRef}
-	case bpmn.EventTypeSignal:
+	case definition.EventTypeSignal:
 		fe.SignalEventDef = &xmlSignalEventDef{SignalRef: ed.SignalRef}
-	case bpmn.EventTypeTimer:
+	case definition.EventTypeTimer:
 		fe.TimerEventDef = &xmlTimerEventDef{TimeCycle: ed.TimerCycle}
-	case bpmn.EventTypeConditional:
+	case definition.EventTypeConditional:
 		fe.ConditionalDef = &xmlConditionalDef{
 			Condition: &xmlConditionExpr{Body: ed.Condition},
 		}
+	case definition.EventTypeError:
+		fe.ErrorEventDef = &xmlErrorEventDef{ErrorRef: ed.ErrorRef}
 	}
 	if ed.CorrelationKey != "" && fe.ExtensionElements == nil {
 		fe.ExtensionElements = &xmlExtensionElements{CorrelationKey: ed.CorrelationKey}
 	} else if ed.CorrelationKey != "" && fe.ExtensionElements != nil {
 		fe.ExtensionElements.CorrelationKey = ed.CorrelationKey
 	}
+}
+
+func attachStartEventDef(fe *xmlFlowElement, ed *definition.EventDefinition) {
+	attachEventDef(fe, ed)
+}
+
+func mapCollaborationForProcess(collabs []xmlCollaboration, processID string) *definition.Collaboration {
+	for _, c := range collabs {
+		relevant := len(c.MessageFlows) > 0
+		for _, p := range c.Participants {
+			if p.ProcessRef == "" || p.ProcessRef == processID {
+				relevant = true
+				break
+			}
+		}
+		if !relevant {
+			continue
+		}
+		out := &definition.Collaboration{}
+		for _, p := range c.Participants {
+			out.Pools = append(out.Pools, definition.Pool{
+				ID: p.ID, Name: p.Name, ProcessRef: p.ProcessRef,
+			})
+		}
+		for _, mf := range c.MessageFlows {
+			out.MessageFlows = append(out.MessageFlows, definition.MessageFlow{
+				ID: mf.ID, Name: mf.Name, SourceRef: mf.SourceRef,
+				TargetRef: mf.TargetRef, MessageRef: mf.MessageRef,
+			})
+		}
+		return out
+	}
+	return nil
+}
+
+func buildXMLCollaboration(c *definition.Collaboration, processID string) xmlCollaboration {
+	x := xmlCollaboration{}
+	for _, p := range c.Pools {
+		x.Participants = append(x.Participants, xmlParticipant{
+			ID: p.ID, Name: p.Name, ProcessRef: firstNonEmpty(p.ProcessRef, processID),
+		})
+	}
+	for _, mf := range c.MessageFlows {
+		x.MessageFlows = append(x.MessageFlows, xmlMessageFlowEl{
+			ID: mf.ID, Name: mf.Name, SourceRef: mf.SourceRef,
+			TargetRef: mf.TargetRef, MessageRef: mf.MessageRef,
+		})
+	}
+	return x
 }

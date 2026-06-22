@@ -1,4 +1,4 @@
-package bpmn
+package definition
 
 import (
 	"fmt"

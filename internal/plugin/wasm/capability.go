@@ -17,8 +17,14 @@ const (
 	CapRemoveUser       Capability = "remove_user"
 	CapReplaceAssignees Capability = "replace_assignees"
 
-	// Task extension point (approve / reject)
+	// Task extension point (approve / reject / extension activities)
 	CapCompleteTask Capability = "complete_task"
+	CapCompleteActivity Capability = "complete_activity"
+
+	// Boundary / gateway extension points
+	CapTriggerBoundary        Capability = "trigger_boundary"
+	CapEvaluateComplexGateway Capability = "evaluate_complex_gateway"
+	CapInvokeCallActivity     Capability = "invoke_call_activity"
 
 	// Control extension point
 	CapTerminate Capability = "terminate"
@@ -50,17 +56,21 @@ var AllAssignee = Set{
 }
 
 var AllTrigger = Set{
-	CapTriggerMessage: {},
-	CapStartProcess:   {},
-	CapReadInstances:  {},
-	CapReadTasks:      {},
+	CapTriggerMessage:         {},
+	CapStartProcess:           {},
+	CapTriggerBoundary:        {},
+	CapReadInstances:          {},
+	CapReadTasks:              {},
+	CapEvaluateComplexGateway: {},
 }
 
 var AllTask = Set{
-	CapCompleteTask:  {},
-	CapReadInstances: {},
-	CapReadTasks:     {},
-	CapReadActivities: {},
+	CapCompleteTask:       {},
+	CapCompleteActivity:   {},
+	CapReadInstances:      {},
+	CapReadTasks:          {},
+	CapReadActivities:     {},
+	CapEvaluateComplexGateway: {},
 }
 
 var AllControl = Set{

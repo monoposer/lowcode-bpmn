@@ -63,6 +63,21 @@ func ApplyTriggerAction(ctx context.Context, host contract.Host, action Action) 
 			BusinessKey: action.BusinessKey,
 			Variables:   action.Variables,
 		})
+	case "trigger_boundary":
+		instID, err := action.InstanceID()
+		if err != nil {
+			return fmt.Errorf("trigger_boundary: invalid process_instance_id")
+		}
+		if action.BoundaryElementID == "" {
+			return nil
+		}
+		return host.TriggerBoundary(ctx, contract.TriggerBoundaryRequest{
+			TenantID:          action.TenantID,
+			ProcessInstanceID: instID,
+			HostElementID:     action.HostElementID,
+			BoundaryElementID: action.BoundaryElementID,
+			Variables:         action.Variables,
+		})
 	default:
 		return nil
 	}
@@ -90,6 +105,25 @@ func ApplyTaskAction(ctx context.Context, host contract.Host, action Action) err
 			Comment:           action.Comment,
 			Variables:         action.Variables,
 			LockVersion:       action.LockVersion,
+		})
+	case "complete_activity":
+		instID, err := action.InstanceID()
+		if err != nil {
+			return fmt.Errorf("complete_activity: invalid process_instance_id")
+		}
+		actID, err := action.ActivityUUID()
+		if err != nil {
+			return fmt.Errorf("complete_activity: invalid activity_id")
+		}
+		return host.CompleteActivity(ctx, contract.CompleteActivityRequest{
+			ProcessInstanceID: instID,
+			ActivityID:        actID,
+			Assignee:          action.Assignee,
+			Action:            action.Action,
+			Comment:           action.Comment,
+			Variables:         action.Variables,
+			LockVersion:       action.LockVersion,
+			SelectedFlowID:    action.SelectedFlowID,
 		})
 	default:
 		return nil

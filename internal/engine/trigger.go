@@ -27,8 +27,9 @@ type TriggerMessageMatch struct {
 
 // TriggerMessageResult aggregates starts from one inbound message (e.g. Airtable webhook).
 type TriggerMessageResult struct {
-	MessageRef string                `json:"message_ref"`
-	Matches    []TriggerMessageMatch `json:"matches"`
+	MessageRef      string                 `json:"message_ref"`
+	Matches         []TriggerMessageMatch  `json:"matches"`
+	BoundaryMatches []TriggerBoundaryMatch `json:"boundary_matches,omitempty"`
 }
 
 // TriggerMessage scans deployed processes and starts those with a matching message startEvent.
@@ -110,5 +111,17 @@ func (e *Engine) TriggerMessage(ctx context.Context, req TriggerMessageRequest) 
 			result.Matches = append(result.Matches, m)
 		}
 	}
+
+	boundaryMatches, err := e.matchBoundaryEventsOnInstances(ctx, req.TenantID, req.MessageRef, req.Variables)
+	if err != nil {
+		return result, err
+	}
+	result.BoundaryMatches = boundaryMatches
+
+	collabMatches, err := e.matchCollaborationMessageFlows(ctx, req.TenantID, req.MessageRef, req.Variables)
+	if err != nil {
+		return result, err
+	}
+	result.Matches = append(result.Matches, collabMatches...)
 	return result, nil
 }

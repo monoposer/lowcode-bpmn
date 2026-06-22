@@ -17,5 +17,8 @@ type Host interface {
 	RemoveUserFromActiveTasks(ctx context.Context, req RemoveUserRequest) error
 	ReplaceTaskAssignees(ctx context.Context, req ReplaceAssigneesRequest) error
 	CompleteTask(ctx context.Context, req CompleteTaskRequest) error
+	CompleteActivity(ctx context.Context, req CompleteActivityRequest) error
+	TriggerBoundary(ctx context.Context, req TriggerBoundaryRequest) error
+	EvaluateComplexGateway(ctx context.Context, processInstanceID uuid.UUID, gatewayElementID string) ([]string, error)
 	Terminate(ctx context.Context, req TerminateRequest) error
 }

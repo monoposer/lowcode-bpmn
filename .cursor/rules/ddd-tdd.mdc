@@ -1,0 +1,50 @@
+---
+description: TDD workflow mapped to DDD layers — domain purity, contract tests, red-green-refactor
+globs:
+  - "**/*_test.go"
+  - "internal/domain/**"
+alwaysApply: false
+---
+
+# DDD + TDD
+
+Full guide: [docs/ddd/testing.md](../../docs/ddd/testing.md)
+
+## Red-Green-Refactor
+
+1. **Red** — failing test in the correct layer (`definition`, `runtime`, `engine`, or store).
+2. **Green** — minimal implementation; domain logic stays in `internal/domain/*`.
+3. **Refactor** — run `go test ./...` before done.
+
+## Test placement
+
+| Layer | Package | Style |
+|-------|---------|-------|
+| Process Design | `internal/domain/definition` | Pure, table-driven, no I/O |
+| Process Runtime | `internal/domain/runtime` | Pure entity/value-object methods |
+| Ports | `internal/domain/ports/testing` | `RunProcessRepositoryContract` |
+| Infrastructure | `internal/store/{memory,gormstore,filestore}` | Contract + adapter tests |
+| Application | `internal/engine` | Integration with `memory.NewStore()` |
+| HTTP delivery | `internal/api` | `httptest` only — do not test domain through HTTP elsewhere |
+
+## Rules
+
+- Domain tests (`definition`, `runtime`) must **not** import `engine`, `api`, or store implementations.
+- Application tests use `memstore.NewStore()` + `engine.NewEngine(store, nil)` — no real DB in unit tests.
+- New `ProcessRepository` methods → extend `porttesting.RunProcessRepositoryContract` and implement in all three backends.
+- Prefer importing `internal/domain/definition` over deprecated `internal/bpmn`.
+- Mark new domain example tests with a `// TDD domain example` comment when they serve as templates.
+
+## Example files
+
+- Domain runtime: `internal/domain/runtime/lifecycle_test.go`
+- Domain definition: `internal/domain/definition/approval_test.go`
+- Port contract: `internal/domain/ports/testing/contract.go`
+- Memory adapter: `internal/store/memory/contract_test.go`
+- Engine integration: `internal/engine/engine_test.go`
+
+## Before finishing
+
+```bash
+go test ./...
+```

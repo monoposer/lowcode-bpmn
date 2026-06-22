@@ -41,6 +41,8 @@ Feishu approval events route to **task**, not trigger. Terminate routes to **con
 | `trigger_message` | trigger | `TriggerMessage` |
 | `start_process` | trigger | `StartProcess` |
 | `complete_task` | task | `CompleteTask` |
+| `complete_activity` | task | `CompleteActivity` (extension elements) |
+| `trigger_boundary` | trigger | `TriggerBoundary` |
 | `terminate` | control | `Terminate` |
 
 Schema: `schemas/adapter-action.schema.json`.
@@ -58,6 +60,9 @@ See [plugins/wasm/example-echo/README.md](../plugins/wasm/example-echo/README.md
 | `remove_user` | `bpmn_host.remove_user` |
 | `replace_assignees` | `bpmn_host.replace_assignees` |
 | `complete_task` | `bpmn_host.complete_task` |
+| `complete_activity` | `bpmn_host.complete_activity` |
+| `trigger_boundary` | `bpmn_host.trigger_boundary` |
+| `evaluate_complex_gateway` | `bpmn_host.evaluate_complex_gateway` |
 | `terminate` | `bpmn_host.terminate` |
 | `read_tasks` | `bpmn_host.list_tasks` (+ `outMaxLen`) |
 | `read_instances` | `bpmn_host.get_process_instance` (+ `outMaxLen`) |

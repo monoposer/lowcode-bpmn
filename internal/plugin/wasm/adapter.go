@@ -81,6 +81,15 @@ func NewAdapter(ctx context.Context, wasmBytes []byte, manifest Manifest, host c
 	if caps.Has(CapCompleteTask) {
 		hmb.NewFunctionBuilder().WithFunc(capHost.hostCompleteTask).Export("complete_task")
 	}
+	if caps.Has(CapCompleteActivity) {
+		hmb.NewFunctionBuilder().WithFunc(capHost.hostCompleteActivity).Export("complete_activity")
+	}
+	if caps.Has(CapTriggerBoundary) {
+		hmb.NewFunctionBuilder().WithFunc(capHost.hostTriggerBoundary).Export("trigger_boundary")
+	}
+	if caps.Has(CapEvaluateComplexGateway) {
+		hmb.NewFunctionBuilder().WithFunc(capHost.hostEvaluateComplexGateway).Export("evaluate_complex_gateway")
+	}
 	if caps.Has(CapTerminate) {
 		hmb.NewFunctionBuilder().WithFunc(capHost.hostTerminate).Export("terminate")
 	}
@@ -335,6 +344,61 @@ func (a *Adapter) hostCompleteTask(ctx context.Context, m api.Module, ptr, size 
 		return 500
 	}
 	return 0
+}
+
+func (a *Adapter) hostCompleteActivity(ctx context.Context, m api.Module, ptr, size uint32) uint32 {
+	if !a.Caps.Has(CapCompleteActivity) {
+		return 403
+	}
+	var req contract.CompleteActivityRequest
+	if err := a.readJSON(ptr, size, &req); err != nil {
+		return 400
+	}
+	if err := a.host.CompleteActivity(ctx, req); err != nil {
+		return 500
+	}
+	return 0
+}
+
+func (a *Adapter) hostTriggerBoundary(ctx context.Context, m api.Module, ptr, size uint32) uint32 {
+	if !a.Caps.Has(CapTriggerBoundary) {
+		return 403
+	}
+	var req contract.TriggerBoundaryRequest
+	if err := a.readJSON(ptr, size, &req); err != nil {
+		return 400
+	}
+	if err := a.host.TriggerBoundary(ctx, req); err != nil {
+		return 500
+	}
+	return 0
+}
+
+func (a *Adapter) hostEvaluateComplexGateway(ctx context.Context, m api.Module, instPtr, instLen, gwPtr, gwLen, outPtr, outMaxLen uint32) uint32 {
+	if !a.Caps.Has(CapEvaluateComplexGateway) {
+		return 403
+	}
+	instRaw, ok := readMem(m, instPtr, instLen)
+	if !ok {
+		return 400
+	}
+	gwRaw, ok := readMem(m, gwPtr, gwLen)
+	if !ok {
+		return 400
+	}
+	id, err := parseUUID(string(instRaw))
+	if err != nil {
+		return 400
+	}
+	flows, err := a.host.EvaluateComplexGateway(ctx, id, string(gwRaw))
+	if err != nil {
+		return 500
+	}
+	raw, err := json.Marshal(flows)
+	if err != nil {
+		return 500
+	}
+	return writeBounded(m, outPtr, outMaxLen, raw)
 }
 
 func (a *Adapter) hostTerminate(ctx context.Context, m api.Module, ptr, size uint32) uint32 {

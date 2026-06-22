@@ -2,7 +2,7 @@
 
 ## Overview
 
-**lowcode-bpmn** is a lightweight BPMN 2.0 workflow engine microservice in Go, inspired by [tumbleweed](https://github.com/lzw5399/tumbleweed). It focuses on process execution — user, role, and form concerns stay in external systems.
+**lowcode-bpmn** is a lightweight BPMN 2.0 workflow engine microservice in Go, inspired by [tumbleweed](https://github.com/lzw5399/tumbleweed). It focuses on **core process execution**; user, role, form, boundary events, advanced gateways, pools/lanes, and collaboration semantics are **extension-backed** via plugins and external systems (see [docs/ddd/extensions.md](./docs/ddd/extensions.md)).
 
 | Component | Role |
 |-----------|------|
@@ -27,11 +27,14 @@ flowchart TB
         API["internal/api"]
         Engine["internal/engine"]
         Worker["Job worker"]
-        BPMN["internal/bpmn"]
+        Definition["domain/definition"]
+        Runtime["domain/runtime"]
+        Ports["domain/ports"]
+        BPMNXML["internal/bpmnxml"]
         Script["internal/script"]
         Plugin["internal/plugin"]
         Event["pkg/event"]
-        Store["engine.Store"]
+        Store["ProcessRepository"]
         GORM["gormstore"]
         File["filestore"]
         Mem["memory.Store"]
@@ -45,7 +48,7 @@ flowchart TB
 
     DB[(PostgreSQL / MySQL / SQLite)]
 
-    Designer -->|BPMN JSON| API
+    Designer -->|BPMN JSON or XML| API
     BizApp -->|Complete task / inbox| API
     Webhooks -->|POST /events/{stream}/{source}| API
     API --> Event
@@ -56,9 +59,11 @@ flowchart TB
     Plugin -->|Host SDK| Engine
     API --> Engine
     Worker --> Engine
-    Engine --> BPMN
+    Engine --> Definition
+    Engine --> Runtime
+    Engine --> Ports
     Engine --> Script
-    Engine --> Store
+    Ports --> Store
     Store --> GORM
     Store --> File
     Store --> Mem
@@ -76,7 +81,7 @@ flowchart TB
 
 ## BPMN 2.0 model
 
-Supported elements:
+**Core-native elements** (engine executes without an adapter):
 
 | Category | Elements |
 |----------|----------|
@@ -85,7 +90,11 @@ Supported elements:
 | **Gateway** | `exclusiveGateway`, `parallelGateway`, `inclusiveGateway` |
 | **Flow** | `sequenceFlow` (optional condition expression) |
 
-Process definitions are JSON documents (`internal/bpmn`):
+**Extension-backed elements** (modeled in IR/XML; active when adapters are registered — see [docs/ddd/extensions.md](./docs/ddd/extensions.md)):
+
+boundary/intermediate events, event-based/complex gateways, service/send/receive/businessRule tasks, call activity, multi-instance, pools/lanes, data objects/stores, user/role/form platforms.
+
+Process definitions are JSON documents (canonical IR in `internal/domain/definition`) or BPMN 2.0 XML via `internal/bpmnxml`:
 
 ```
 ProcessDefinition
@@ -116,7 +125,7 @@ JSON protocol and examples: [`schemas/`](./schemas/README.md).
 | parallelGateway | All outgoing flows | Wait for all incoming flows |
 | inclusiveGateway | All matching conditions | Same as parallel |
 
-Conditions support simple expressions: `field == value`, `amount >= 1000`, dot paths (`event.fields.status == Pending`), truthy field names (`internal/bpmn/expression.go`).
+Conditions support simple expressions: `field == value`, `amount >= 1000`, dot paths (`event.fields.status == Pending`), truthy field names (`internal/domain/definition/expression.go`).
 
 Join state is stored in `ProcessInstance.InternalState` (persisted in DB, **not exposed via API**).
 
@@ -181,10 +190,14 @@ GORM store (`internal/store/gormstore`) applies schema via **AutoMigrate** on st
 | `GET /api/v1/tenants/{tenantId}/processes` | List latest version per process key |
 | `DELETE /api/v1/tenants/{tenantId}/processes/{key}` | Delete all versions for a key |
 | `POST /api/v1/process-instances` | Start instance (manual / none start) |
-| `POST /api/v1/triggers/message` | Message start (direct or after adapter normalization) |
+| `POST /api/v1/triggers/message` | Message start; also fires message **boundary events** on running instances (`boundary_matches`) |
+| `POST /api/v1/triggers/signal` | Signal start |
+| `POST /api/v1/triggers/conditional` | Conditional start |
+| `POST /api/v1/triggers/boundary` | Explicit boundary trigger (timer / error scheduler) |
 | `GET /api/v1/process-instances/{id}` | Instance status, variables, `lock_version` |
 | `GET /api/v1/process-instances/{id}/activities` | Activity audit trail |
 | `POST /api/v1/process-instances/{id}/tasks/{activityId}/complete` | Complete UserTask (approve/reject) |
+| `POST /api/v1/process-instances/{id}/activities/{activityId}/complete` | Complete extension activity (gateways, callActivity) — optional `selectedFlowId` |
 | `POST /api/v1/process-instances/{id}/terminate` | Terminate instance or sub-process scope |
 | `PATCH /api/v1/process-instances/{id}/tasks/{activityId}/assignees` | Manual assignee override |
 | `GET /api/v1/tasks?tenantId=&assignee=` | UserTask inbox |
@@ -307,18 +320,45 @@ Instances carry `lock_version`. Clients may pass `lockVersion` when completing a
 { "assignee": "u1", "action": "approve", "comment": "ok", "lockVersion": 3 }
 ```
 
+## DDD layers
+
+The codebase follows a lightweight Domain-Driven Design layout. Full guide: [docs/ddd/README.md](./docs/ddd/README.md).
+
+| Layer | Packages | Role |
+|-------|----------|------|
+| **Domain — Process Design** | `internal/domain/definition` | Static BPMN IR, validation, conditions, start-event matching |
+| **Domain — Process Runtime** | `internal/domain/runtime` | Instances, activities, jobs, inbox DTOs |
+| **Ports** | `internal/domain/ports` | `ProcessRepository` outbound contract |
+| **Application** | `internal/engine`, `internal/application` | Token traversal, triggers, approval, async worker |
+| **Delivery** | `internal/api`, `cmd/server` | HTTP, metrics, CORS |
+| **Infrastructure** | `internal/store/*`, `internal/bpmnxml`, `internal/script`, `pkg/event` | Persistence, XML codec, script runner, event transport |
+
+Compatibility shims during migration:
+
+- `internal/bpmn/compat.go` re-exports `definition` (deprecated)
+- `engine.Store` aliases `ports.ProcessRepository`
+- `engine.ProcessInstance` and related types alias `runtime.*`
+
+BPMN 2.0 support matrix: [docs/bpmn-compliance.md](./docs/bpmn-compliance.md).
+
 ## Package layout
 
 ```
 cmd/server/                 HTTP entrypoint + worker + plugin consumers
 internal/api/               Chi routes (router, processes, instances, tasks), metrics, auth
-internal/bpmn/              Model, validation, expressions, approval
-internal/engine/            Engine, worker, Store interface, trigger/reject
+internal/application/       Use-case layer marker (orchestration in engine)
+internal/domain/
+  definition/               Process Design — model, validation, expressions, approval rules
+  runtime/                  Process Runtime — instances, activities, jobs
+  ports/                    ProcessRepository persistence port
+internal/bpmn/              Deprecated compat re-exports → definition
+internal/bpmnxml/           BPMN 2.0 XML import/export
+internal/engine/            Application layer — Engine, worker, Store alias
 internal/plugin/            Runtime, bootstrap, WASM loader (no vendor code)
 internal/script/            Runner (goja JS + set DSL)
 internal/store/             Backend factory (db / file / memory)
 internal/store/gormstore/   GORM persistence + migrations
-internal/store/filestore/   YAML file persistence
+internal/store/filestore/   YAML / XML file persistence
 internal/store/memory/      In-memory store (tests)
 internal/telemetry/         Logging + OpenTelemetry
 pkg/env/                    Environment variable helpers
@@ -330,6 +370,8 @@ plugins/registry/           Name → adapter lookup
 plugins/go/                 feishu, wecom, airtable, generic, canonical
 plugins/wasm/               WASM sandbox plugins
 schemas/                    JSON Schema for definitions and adapter actions
+docs/ddd/                   DDD layer and domain implementation guides
+docs/bpmn-compliance.md     BPMN 2.0 supported vs out-of-scope matrix
 ```
 
 **Boundary rule:** `internal/` holds engine core only; vendor-specific mapping lives under `plugins/`.
@@ -342,7 +384,7 @@ schemas/                    JSON Schema for definitions and adapter actions
 | **Pluggable ingress** | Quad streams + Go/WASM adapters without engine forks |
 | **Capability sandbox** | WASM host imports gated by manifest (Paca-style) |
 | **Multi-store** | Postgres / MySQL / SQLite / file / memory via one interface |
-| **JSON-first** | Designer-friendly; no XML BPMN required |
+| **JSON-first + XML** | Designer-friendly JSON API; BPMN 2.0 XML import/export via `bpmnxml` |
 | **Rich userTask** | 或签/会签/顺序签, reject return, scope terminate |
 | **Versioning** | Deploy increments version; instances pin snapshots |
 | **Async option** | Job table + worker for non-blocking start/continue |
@@ -354,7 +396,7 @@ schemas/                    JSON Schema for definitions and adapter actions
 | Item | Status |
 |------|--------|
 | Authentication / authorization | Optional API keys via `API_KEY` / `API_KEYS`; set `AUTH_REQUIRED=true` in production |
-| Boundary events / call activity | Not supported |
+| Boundary events / call activity / multi-instance / event-based & complex gateways / pools & lanes | Extension-backed — IR + plugin adapters ([extensions.md](./docs/ddd/extensions.md)) |
 | Timer start | Metadata only; external scheduler required |
 | Script sandbox | goja with basic isolation; harden for untrusted scripts |
 | Event consumer | In-memory default is single-process; Redis supported (`EVENT_CONSUMER=redis`) |

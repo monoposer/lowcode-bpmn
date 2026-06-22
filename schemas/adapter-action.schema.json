@@ -11,9 +11,11 @@
       "enum": [
         "trigger_message",
         "start_process",
+        "trigger_boundary",
         "remove_user",
         "replace_assignees",
         "complete_task",
+        "complete_activity",
         "terminate"
       ]
     },
@@ -39,7 +41,11 @@
     "comment": { "type": "string" },
     "lock_version": { "type": "integer" },
     "scope_id": { "type": "string" },
-    "variables": { "type": "object" }
+    "variables": { "type": "object" },
+    "selected_flow_id": { "type": "string", "description": "eventBasedGateway outgoing sequence flow id" },
+    "boundary_element_id": { "type": "string", "description": "boundaryEvent element id for trigger_boundary" },
+    "host_element_id": { "type": "string", "description": "optional host activity element id" },
+    "gateway_element_id": { "type": "string", "description": "complexGateway element id (read via evaluate_complex_gateway host fn)" }
   },
   "allOf": [
     {
@@ -61,6 +67,14 @@
     {
       "if": { "properties": { "kind": { "const": "terminate" } } },
       "then": { "required": ["process_instance_id"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "trigger_boundary" } } },
+      "then": { "required": ["process_instance_id", "boundary_element_id"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "complete_activity" } } },
+      "then": { "required": ["process_instance_id", "activity_id"] }
     }
   ]
 }

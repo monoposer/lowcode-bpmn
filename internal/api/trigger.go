@@ -38,7 +38,7 @@ func handleTriggerMessage(deps RouterDeps) http.HandlerFunc {
 			return
 		}
 		status := http.StatusOK
-		if len(result.Matches) == 0 {
+		if len(result.Matches) == 0 && len(result.BoundaryMatches) == 0 {
 			status = http.StatusAccepted
 		}
 		writeJSON(w, status, result)

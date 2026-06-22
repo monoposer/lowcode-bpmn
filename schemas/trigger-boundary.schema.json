@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/monoposer/lowcode-bpmn/schemas/trigger-boundary.schema.json",
+  "title": "Trigger Boundary Event",
+  "description": "Explicit boundary event trigger for timer schedulers, error handlers, or admin tools.",
+  "type": "object",
+  "required": ["tenantId", "processInstanceId", "boundaryElementId"],
+  "additionalProperties": false,
+  "properties": {
+    "tenantId": { "type": "string", "minLength": 1 },
+    "processInstanceId": { "type": "string", "format": "uuid" },
+    "hostElementId": {
+      "type": "string",
+      "description": "Optional disambiguation when multiple hosts could match"
+    },
+    "boundaryElementId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "boundaryEvent element id from process definition"
+    },
+    "variables": {
+      "type": "object",
+      "description": "Merged into process instance variables when boundary fires",
+      "additionalProperties": true
+    }
+  }
+}

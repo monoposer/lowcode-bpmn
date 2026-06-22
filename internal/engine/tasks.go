@@ -98,6 +98,7 @@ func (e *Engine) activateReceiveTask(ctx context.Context, state *execState, el b
 		return e.completeElement(ctx, state, el.ID)
 	}
 	act.Input = map[string]any{"messageRef": el.MessageRef}
+	attachBoundaryMetadata(act, state.reg, el.ID)
 	if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
 		return err
 	}

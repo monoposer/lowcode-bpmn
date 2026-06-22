@@ -22,6 +22,18 @@
     "flows": {
       "type": "array",
       "items": { "$ref": "#/$defs/sequenceFlow" }
+    },
+    "laneSet": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/lane" }
+    },
+    "dataObjects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dataObject" }
+    },
+    "dataStores": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dataStore" }
     }
   },
   "$defs": {
@@ -39,12 +51,18 @@
         "exclusiveGateway",
         "parallelGateway",
         "inclusiveGateway",
-        "subProcess"
+        "subProcess",
+        "boundaryEvent",
+        "intermediateCatchEvent",
+        "intermediateThrowEvent",
+        "eventBasedGateway",
+        "complexGateway",
+        "callActivity"
       ]
     },
     "eventDefinitionType": {
       "type": "string",
-      "enum": ["none", "message", "signal", "timer", "conditional"],
+      "enum": ["none", "message", "signal", "timer", "conditional", "error"],
       "description": "BPMN 2.0 start event definition type"
     },
     "eventDefinition": {
@@ -72,6 +90,10 @@
         "timerCycle": {
           "type": "string",
           "description": "timerEventDefinition — ISO-8601 repeat or cron; external scheduler invokes start/trigger"
+        },
+        "errorRef": {
+          "type": "string",
+          "description": "errorEventDefinition — error code for boundary events"
         }
       },
       "allOf": [
@@ -102,8 +124,52 @@
             "required": ["type"]
           },
           "then": { "required": ["condition"] }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "error" } },
+            "required": ["type"]
+          },
+          "then": { "required": ["errorRef"] }
         }
       ]
+    },
+    "multiInstanceLoopCharacteristics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isSequential": { "type": "boolean" },
+        "collection": { "type": "string" },
+        "elementVariable": { "type": "string" }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "flowNodeRefs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "dataObject": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" }
+      }
+    },
+    "dataStore": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" }
+      }
     },
     "element": {
       "type": "object",
@@ -142,6 +208,17 @@
         "decisionRef": { "type": "string", "description": "businessRuleTask decision reference" },
         "autoComplete": { "type": "boolean" },
         "eventDefinition": { "$ref": "#/$defs/eventDefinition" },
+        "attachedToRef": { "type": "string", "description": "boundaryEvent host activity id" },
+        "cancelActivity": { "type": "boolean" },
+        "calledElement": { "type": "string", "description": "callActivity target process key" },
+        "multiInstance": { "$ref": "#/$defs/multiInstanceLoopCharacteristics" },
+        "laneRef": { "type": "string" },
+        "dataInputRefs": { "type": "array", "items": { "type": "string" } },
+        "dataOutputRefs": { "type": "array", "items": { "type": "string" } },
+        "formKey": { "type": "string", "description": "external form designer key" },
+        "formUrl": { "type": "string", "description": "external form rendering URL" },
+        "extensionHandler": { "type": "string", "description": "explicit plugin adapter id" },
+        "eventSubProcess": { "type": "boolean" },
         "properties": { "type": "object" }
       }
     },

@@ -5,7 +5,9 @@ Canonical schemas for the lowcode-bpmn engine. **BPMN 2.0 interchange format is 
 | File | Purpose |
 |------|---------|
 | [process-definition.schema.json](./process-definition.schema.json) | Process IR (JSON deploy or mapped from XML) |
-| [trigger-message.schema.json](./trigger-message.schema.json) | Direct message trigger (`POST /api/v1/triggers/message`) |
+| [trigger-message.schema.json](./trigger-message.schema.json) | Direct message trigger (`POST /api/v1/triggers/message`); response may include `boundary_matches` |
+| [trigger-boundary.schema.json](./trigger-boundary.schema.json) | Explicit boundary trigger (`POST /api/v1/triggers/boundary`) |
+| [complete-activity.schema.json](./complete-activity.schema.json) | Extension activity complete (`POST .../activities/{id}/complete`) |
 | [inbound-event.schema.json](./inbound-event.schema.json) | Plugin envelope (`POST /api/v1/events/{assignee|trigger|task}/{source}`) |
 | [adapter-action.schema.json](./adapter-action.schema.json) | Canonical adapter intent before Host SDK calls |
 
@@ -18,7 +20,9 @@ Canonical schemas for the lowcode-bpmn engine. **BPMN 2.0 interchange format is 
 
 Supported BPMN task types: `userTask`, `scriptTask`, `serviceTask`, `sendTask`, `receiveTask`, `businessRuleTask`. Use `extensionElements` / JSON `taskType` for business subtypes.
 
-Start event triggers (`eventDefinition`): `none`, `message`, `signal`, `timer`, `conditional`. APIs: `/triggers/message`, `/triggers/signal`, `/triggers/conditional`.
+Start event triggers (`eventDefinition`): `none`, `message`, `signal`, `timer`, `conditional`. APIs: `/triggers/message`, `/triggers/signal`, `/triggers/conditional`, `/triggers/boundary` (boundary on running instances).
+
+Extension activities (`boundaryEvent`, `eventBasedGateway`, `complexGateway`, `callActivity`): complete via `/process-instances/{id}/activities/{activityId}/complete`.
 
 Plugin architecture: [docs/plugins.md](../docs/plugins.md).
 

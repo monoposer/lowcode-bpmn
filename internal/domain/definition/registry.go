@@ -1,4 +1,4 @@
-package bpmn
+package definition
 
 import "fmt"
 
@@ -10,6 +10,8 @@ type Registry struct {
 	Incoming       map[string][]SequenceFlow
 	StartEvents    []string
 	EndEvents      map[string]struct{}
+	BoundaryByHost map[string][]Element // attachedToRef → boundary events
+	ElementLane    map[string]Lane      // element id → lane
 }
 
 // BuildRegistry validates and indexes a process definition.
@@ -18,11 +20,13 @@ func BuildRegistry(def ProcessDefinition) (*Registry, error) {
 		return nil, err
 	}
 	r := &Registry{
-		Def:         def,
-		Elements:    make(map[string]Element, len(def.Elements)),
-		Outgoing:    make(map[string][]SequenceFlow),
-		Incoming:    make(map[string][]SequenceFlow),
-		EndEvents:   make(map[string]struct{}),
+		Def:            def,
+		Elements:       make(map[string]Element, len(def.Elements)),
+		Outgoing:       make(map[string][]SequenceFlow),
+		Incoming:       make(map[string][]SequenceFlow),
+		EndEvents:      make(map[string]struct{}),
+		BoundaryByHost: make(map[string][]Element),
+		ElementLane:    make(map[string]Lane),
 	}
 	for _, el := range def.Elements {
 		r.Elements[el.ID] = el
@@ -31,6 +35,15 @@ func BuildRegistry(def ProcessDefinition) (*Registry, error) {
 			r.StartEvents = append(r.StartEvents, el.ID)
 		case KindEndEvent:
 			r.EndEvents[el.ID] = struct{}{}
+		case KindBoundaryEvent:
+			if el.AttachedToRef != "" {
+				r.BoundaryByHost[el.AttachedToRef] = append(r.BoundaryByHost[el.AttachedToRef], el)
+			}
+		}
+	}
+	for _, lane := range def.LaneSet {
+		for _, ref := range lane.FlowNodeRefs {
+			r.ElementLane[ref] = lane
 		}
 	}
 	for _, flow := range def.Flows {
@@ -80,4 +93,15 @@ func (r *Registry) IsJoinGateway(id string) bool {
 	default:
 		return false
 	}
+}
+
+// BoundaryEvents returns boundary events attached to the given activity id.
+func (r *Registry) BoundaryEvents(hostElementID string) []Element {
+	return r.BoundaryByHost[hostElementID]
+}
+
+// LaneForElement returns the lane containing a flow node, if any.
+func (r *Registry) LaneForElement(elementID string) (Lane, bool) {
+	lane, ok := r.ElementLane[elementID]
+	return lane, ok
 }

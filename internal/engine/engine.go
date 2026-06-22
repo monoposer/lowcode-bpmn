@@ -536,6 +536,14 @@ func (e *Engine) activateElement(ctx context.Context, state *execState, elementI
 		}
 		initUserTaskApproval(act, el, resolvedAssignees(state, elementID, el))
 		stampAssigneeSyncMeta(act, resolvedAssigneeSource(state, elementID, el), "")
+		attachBoundaryMetadata(act, state.reg, elementID)
+		if lane, ok := state.reg.LaneForElement(elementID); ok {
+			if act.Input == nil {
+				act.Input = map[string]any{}
+			}
+			act.Input["laneId"] = lane.ID
+			act.Input["laneName"] = lane.Name
+		}
 		if err := e.store.UpdateActivityInstance(ctx, act); err != nil {
 			return err
 		}
@@ -553,6 +561,9 @@ func (e *Engine) activateElement(ctx context.Context, state *execState, elementI
 		return e.completeElement(ctx, state, elementID)
 
 	default:
+		if bpmn.IsExtensionKind(el.Kind) {
+			return e.activateExtensionElement(ctx, state, el, act)
+		}
 		return fmt.Errorf("unsupported element kind: %s", el.Kind)
 	}
 }

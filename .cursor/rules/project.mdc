@@ -5,12 +5,17 @@ alwaysApply: true
 
 # lowcode-bpmn
 
-Go BPMN 2.0 engine microservice. JSON process definitions; no XML, no legacy stage orchestrator.
+Go BPMN 2.0 engine microservice. JSON + BPMN XML process definitions; no legacy stage orchestrator.
 
 ## Packages
 
-- `internal/engine` — execution; `engine.Store` is the persistence boundary
-- `internal/bpmn` — model, validation, conditions (incl. dot paths like `item.kk >= 10`)
+- `internal/domain/definition` — Process Design (model, validation, conditions)
+- `internal/domain/runtime` — Process Runtime entities
+- `internal/domain/ports` — `ProcessRepository` persistence port
+- `internal/engine` — application layer; `engine.Store` aliases `ports.ProcessRepository`
+- `internal/bpmn` — deprecated compat shim (`compat.go` only)
+- `internal/bpmnxml` — BPMN 2.0 XML import/export
+- `internal/plugin` — integration extensions (assignee/trigger/task/control streams)
 - `internal/api` — Chi HTTP; errors `{ error, code }`
 - `internal/store/open.go` — `STORE_BACKEND`: `db` | `file` | `memory`
 
@@ -19,6 +24,16 @@ Go BPMN 2.0 engine microservice. JSON process definitions; no XML, no legacy sta
 - `userTask`: multi-sign modes `any|all|sequential` (或签/会签/顺签); complete requires `assignee` when multiple assignees
 - Deploy bumps version; instances pin snapshot at start
 - New store methods → implement in `memory`, `gormstore`, `filestore`
+- Advanced BPMN (boundary events, complex/event gateways, pools/lanes, call activity, etc.) → extension-backed per [docs/ddd/extensions.md](../../docs/ddd/extensions.md); domain IR first, plugins for execution
+
+## TDD
+
+Layer-mapped test workflow: [docs/ddd/testing.md](../../docs/ddd/testing.md). Cursor rule: [ddd-tdd.mdc](./ddd-tdd.mdc).
+
+- Domain (`definition`, `runtime`): pure table-driven tests, no I/O
+- Ports: `RunProcessRepositoryContract` in `internal/domain/ports/testing`
+- Engine: `memory.NewStore()` integration tests
+- HTTP: `internal/api` only
 
 ## Commands
 
